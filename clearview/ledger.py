@@ -66,6 +66,16 @@ def payments_in_transaction(rpc: ZcashRPC, txid: str) -> list[LedgerEntry]:
     An output with ``outgoing = true`` went to an address outside the wallet,
     which is a payment. ``walletInternal`` marks change and is handled by
     `receipts_for_address`, so it is skipped here to avoid double counting.
+
+    Zallet notes (altered semantics vs zcashd):
+
+    * ``outgoing`` is now **omitted** for outputs that are neither for the wallet
+      nor in a wallet-funded transaction. Treating a missing flag as false is
+      therefore correct - such an output is not our payment.
+    * Transparent inputs and outputs are included, so ``pool`` may be
+      ``"transparent"``; those carry no ``memo``.
+    * Block metadata (``blocktime``, ``blockindex``, ``confirmations``) is now
+      returned here, so it no longer has to be joined from the receipt.
     """
     detail = rpc.call("z_viewtransaction", txid)
     entries = []
@@ -80,6 +90,9 @@ def payments_in_transaction(rpc: ZcashRPC, txid: str) -> list[LedgerEntry]:
                 amount_zat=int(output["valueZat"]),
                 address=output.get("address"),
                 memo=_memo_of(output),
+                block_height=detail.get("blockindex"),
+                block_time=detail.get("blocktime"),
+                confirmations=detail.get("confirmations"),
                 output_index=output.get("output", output.get("action")),
             )
         )
@@ -112,6 +125,8 @@ def build_ledger(
 
     for txid in sorted(seen_txids):
         for payment in payments_in_transaction(rpc, txid):
+            # Zallet returns block metadata on z_viewtransaction; zcashd did not.
+            # Only fill the gaps, so a real value is never overwritten.
             height, time, confs = known_heights.get(txid, (None, None, None))
             ledger.entries.append(
                 LedgerEntry(
@@ -121,9 +136,9 @@ def build_ledger(
                     amount_zat=payment.amount_zat,
                     address=payment.address,
                     memo=payment.memo,
-                    block_height=height,
-                    block_time=time,
-                    confirmations=confs,
+                    block_height=payment.block_height if payment.block_height is not None else height,
+                    block_time=payment.block_time if payment.block_time is not None else time,
+                    confirmations=payment.confirmations if payment.confirmations is not None else confs,
                     output_index=payment.output_index,
                 )
             )
@@ -131,14 +146,18 @@ def build_ledger(
     return ledger
 
 
-def reconcile(rpc: ZcashRPC, ledger: Ledger, minconf: int = 1) -> dict:
-    """Check the ledger against the node's own balance for the viewing key.
+def reconcile(rpc: ZcashRPC, ledger: Ledger, account: str, minconf: int = 1) -> dict:
+    """Check the ledger against the node's own balance for the account.
 
     The point of an audit tool is that its books can be *proved* against the
-    chain, so this compares the reconstructed balance to
-    ``z_getbalanceforviewingkey`` and reports any drift.
+    chain, so this compares the reconstructed balance to the node's and reports
+    any drift.
+
+    Uses ``z_getbalanceforaccount``. zcashd's ``z_getbalanceforviewingkey`` is
+    **not planned** in Zallet: an imported viewing key becomes an account with a
+    UUID, so the account-scoped method covers it (zallet#74).
     """
-    reported = rpc.call("z_getbalanceforviewingkey", ledger.viewing_key, minconf)
+    reported = rpc.call("z_getbalanceforaccount", account, minconf)
     node_total = sum(
         int(pool.get("valueZat", 0)) for pool in (reported.get("pools") or {}).values()
     )

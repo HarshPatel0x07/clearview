@@ -17,6 +17,9 @@ from typing import Any
 
 ZADDR = "ztestsapling1audit0000000000000000000000000000000000000000000000000000000000000000000000"
 UFVK = "uviewtest1clearview00000000000000000000000000000000000000000000000000000000000000000000"
+# An imported viewing key becomes a Zallet account identified by UUID; the
+# account-scoped balance method is what reconciliation uses (zallet#74).
+ACCOUNT_UUID = "6f1f1f3a-0d2c-4e5b-9a77-1b2c3d4e5f60"
 
 # An empty Zcash memo: 0xF6 followed by zero padding.
 EMPTY_MEMO = "f6" + "00" * 511
@@ -47,7 +50,7 @@ class FakeZcashRPC:
             return list(self.received)
         if method == "z_viewtransaction":
             return self.transactions.get(params[0], {"txid": params[0], "spends": [], "outputs": []})
-        if method == "z_getbalanceforviewingkey":
+        if method == "z_getbalanceforaccount":
             return self.balance
         if method == "z_importviewingkey":
             return {"type": "sapling", "address": ZADDR}
@@ -120,16 +123,39 @@ DEFAULT_TRANSACTIONS: dict[str, dict] = {
          "walletInternal": False, "value": 1.0, "valueZat": 100_000_000, **_memo("Monthly giving")},
     ]},
     # The vendor payment: one outgoing output, one change output.
-    "cc" * 32: {"txid": "cc" * 32, "spends": [
-        {"pool": "orchard", "action": 0, "txidPrev": "aa" * 32, "actionPrev": 0,
-         "address": ZADDR, "value": 3.5, "valueZat": 350_000_000},
-    ], "outputs": [
-        {"pool": "orchard", "action": 0, "address": "ztestsapling1vendor000000000000000000",
-         "outgoing": True, "walletInternal": False, "value": 0.75, "valueZat": 75_000_000,
-         **_memo("Invoice 2026-114 - venue hire")},
-        {"pool": "orchard", "action": 1, "outgoing": False, "walletInternal": True,
-         "value": 2.7499, "valueZat": 274_990_000, "memo": EMPTY_MEMO},
-    ]},
+    # Zallet adds top-level status/confirmations/blockhash/blockindex/blocktime/
+    # fee/account_uuid, so block metadata arrives here rather than being joined
+    # from the receipt.
+    "cc" * 32: {
+        "txid": "cc" * 32,
+        "status": "mined",
+        "confirmations": 20,
+        "blockhash": "0" * 64,
+        "blockindex": 120,
+        "blocktime": 1_758_200_000,
+        "version": 5,
+        "expiryheight": 140,
+        "fee": 0.0001,
+        "generated": False,
+        "spends": [
+            {"pool": "orchard", "action": 0, "txidPrev": "aa" * 32, "actionPrev": 0,
+             "address": ZADDR, "value": 3.5, "valueZat": 350_000_000,
+             "account_uuid": ACCOUNT_UUID},
+        ],
+        "outputs": [
+            {"pool": "orchard", "action": 0, "address": "ztestsapling1vendor000000000000000000",
+             "outgoing": True, "walletInternal": False, "value": 0.75, "valueZat": 75_000_000,
+             **_memo("Invoice 2026-114 - venue hire")},
+            {"pool": "orchard", "action": 1, "outgoing": False, "walletInternal": True,
+             "value": 2.7499, "valueZat": 274_990_000, "memo": EMPTY_MEMO,
+             "account_uuid": ACCOUNT_UUID},
+            # Zallet includes transparent outputs and omits `outgoing` when the
+            # output is neither ours nor in a wallet-funded transaction. A missing
+            # flag must not be read as a payment.
+            {"pool": "transparent", "tOut": 0, "address": "tmUnrelated0000000000000000000000",
+             "value": 0.01, "valueZat": 1_000_000},
+        ],
+    },
     "dd" * 32: {"txid": "dd" * 32, "spends": [], "outputs": [
         {"pool": "sapling", "output": 0, "address": ZADDR, "outgoing": False,
          "walletInternal": False, "value": 0.25, "valueZat": 25_000_000, **_memo("Anonymous gift")},

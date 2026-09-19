@@ -85,6 +85,7 @@ def main() -> int:
     p.add_argument("--network", default="regtest", choices=["mainnet", "testnet", "regtest"])
     p.add_argument("--viewing-key", help="import this viewing key before reading")
     p.add_argument("--address", action="append", default=[], help="shielded address (repeatable)")
+    p.add_argument("--account", help="account UUID for reconciliation (Zallet). Defaults to the viewing key")
     p.add_argument("--minconf", type=int, default=1)
     p.add_argument("--rescan-height", type=int, default=0)
     args = p.parse_args()
@@ -93,7 +94,10 @@ def main() -> int:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from tests.fixtures import UFVK, ZADDR, FakeZcashRPC
 
+        from tests.fixtures import ACCOUNT_UUID
+
         rpc, key, addresses = FakeZcashRPC(), UFVK, [ZADDR]
+        args.account = args.account or ACCOUNT_UUID
         print("[mock mode - canned data, no node contacted]\n")
     else:
         if not (args.rpc_user and args.rpc_password):
@@ -121,7 +125,7 @@ def main() -> int:
 
     try:
         ledger = build_ledger(rpc, key, addresses, args.minconf)
-        recon = reconcile(rpc, ledger, args.minconf)
+        recon = reconcile(rpc, ledger, args.account or key, args.minconf)
     except (RPCError, RuntimeError) as err:
         print(f"Failed while reading the chain: {err}", file=sys.stderr)
         return 1

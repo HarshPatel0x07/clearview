@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from clearview.ledger import build_ledger, reconcile  # noqa: E402
 from clearview.models import Direction, to_zec  # noqa: E402
-from tests.fixtures import UFVK, ZADDR, FakeZcashRPC  # noqa: E402
+from tests.fixtures import ACCOUNT_UUID, UFVK, ZADDR, FakeZcashRPC  # noqa: E402
 
 
 class TestLedgerReconstruction(unittest.TestCase):
@@ -70,6 +70,15 @@ class TestLedgerReconstruction(unittest.TestCase):
         for entry, balance in self.ledger.running_balance():
             self.assertGreaterEqual(balance, 0, f"negative after {entry.txid[:8]}")
 
+    def test_output_without_outgoing_flag_is_not_a_payment(self) -> None:
+        """Zallet omits `outgoing` for outputs that are not ours in txs we did not fund.
+
+        A missing flag must read as 'not our payment', never as one.
+        """
+        payments = [e for e in self.ledger.entries if e.direction is Direction.PAYMENT]
+        self.assertNotIn("transparent", [p.pool for p in payments])
+        self.assertEqual(len(payments), 1)
+
     def test_payment_inherits_block_metadata(self) -> None:
         """z_viewtransaction omits height/time, so it must be joined from the receipt."""
         payment = next(e for e in self.ledger.entries if e.direction is Direction.PAYMENT)
@@ -87,7 +96,7 @@ class TestReconciliation(unittest.TestCase):
     def test_reconciles_against_node_balance(self) -> None:
         rpc = FakeZcashRPC()
         ledger = build_ledger(rpc, UFVK, [ZADDR])
-        result = reconcile(rpc, ledger)
+        result = reconcile(rpc, ledger, ACCOUNT_UUID)
         self.assertTrue(result["reconciled"], result)
         self.assertEqual(result["difference_zat"], 0)
         self.assertEqual(result["node_balance_zat"], 300_000_000)
@@ -96,7 +105,7 @@ class TestReconciliation(unittest.TestCase):
         """A tool auditors rely on must notice when its books disagree with the chain."""
         rpc = FakeZcashRPC(balance={"pools": {"orchard": {"valueZat": 999}}})
         ledger = build_ledger(rpc, UFVK, [ZADDR])
-        result = reconcile(rpc, ledger)
+        result = reconcile(rpc, ledger, ACCOUNT_UUID)
         self.assertFalse(result["reconciled"])
         self.assertEqual(result["difference_zat"], 300_000_000 - 999)
 
@@ -107,7 +116,7 @@ class TestEdgeCases(unittest.TestCase):
         ledger = build_ledger(rpc, UFVK, [ZADDR])
         self.assertEqual(ledger.entries, [])
         self.assertEqual(ledger.balance_zat, 0)
-        self.assertTrue(reconcile(rpc, ledger)["reconciled"])
+        self.assertTrue(reconcile(rpc, ledger, ACCOUNT_UUID)["reconciled"])
 
     def test_unconfirmed_entries_sort_last(self) -> None:
         rpc = FakeZcashRPC(received=[

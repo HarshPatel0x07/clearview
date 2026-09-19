@@ -1,13 +1,14 @@
 {
-  "name": "Clearview (zcashd regtest)",
+  "name": "Clearview (Zebra + Zallet regtest)",
   "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": false,
       "upgradePackages": true
-    }
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
-  "postCreateCommand": "bash .devcontainer/install-zcashd.sh",
+  "postCreateCommand": "bash .devcontainer/install-z3.sh",
   "customizations": {
     "vscode": {
       "extensions": ["ms-python.python"],

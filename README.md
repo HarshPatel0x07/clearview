@@ -30,6 +30,13 @@ Two RPCs do the work:
 |---|---|
 | `z_listreceivedbyaddress` | Every note received: amount, memo, height, and a `change` flag |
 | `z_viewtransaction` | Per-transaction shielded detail, whose outputs carry `outgoing` (not ours → a payment) and `walletInternal` (change) |
+| `z_getbalanceforaccount` | The node's own balance, to reconcile against |
+
+Built against the **Zebra + Zallet** stack. `zcashd` reached
+[End of Life](https://z.cash/support/zcashd-deprecation/) on 2026-07-18 — its nodes halt and refuse
+to restart — so tooling built on it no longer runs. Zallet keeps `z_viewtransaction` with richer
+semantics, and replaces `z_getbalanceforviewingkey` with `z_getbalanceforaccount`, since an
+imported viewing key becomes an account with a UUID.
 
 Those two flags are the entire classification primitive:
 
@@ -65,8 +72,9 @@ RECONCILED: ledger 3.00000000 ZEC vs node 3.00000000 ZEC
 
 ## Against a real node
 
-See [`regtest/setup.md`](regtest/setup.md). regtest is a private local chain — instant blocks, no
-sync, no faucet.
+See [`regtest/setup.md`](regtest/setup.md). The [Z3 stack](https://github.com/ZcashFoundation/z3)
+runs Zebra + Zallet under Docker Compose; on **regtest** it starts in seconds — instant blocks, no
+peers, no sync, no faucet.
 
 ```bash
 python scripts/prove_spine.py \
@@ -80,7 +88,7 @@ python scripts/prove_spine.py \
 python -m unittest discover -s tests -v
 ```
 
-15 tests, no dependencies. The RPC layer is injectable, so all bookkeeping logic is verified
+16 tests, no dependencies. The RPC layer is injectable, so all bookkeeping logic is verified
 against schema-accurate fixtures transcribed from the Zcash 6.12.2 RPC docs. One test asserts the
 claim the product rests on: **no spending-key RPC is ever called.**
 
