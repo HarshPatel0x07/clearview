@@ -7,10 +7,10 @@ we pivot.
     # against canned data - works today, no node required
     python scripts/prove_spine.py --mock
 
-    # against a real zcashd (regtest or testnet)
+    # against the Z3 stack (Zebra + Zallet) on regtest, via the rpc-router
     python scripts/prove_spine.py \
-        --rpc-user zcashrpc --rpc-password <pw> --network regtest \
-        --viewing-key uview1... --address ztestsapling1...
+        --rpc-url http://127.0.0.1:8181 \
+        --viewing-key uview1... --address ztestsapling1... --account <uuid>
 
 If --viewing-key is given, it is imported first (z_importviewingkey), so the node
 can decrypt the relevant notes. A spending key is never requested.
@@ -80,6 +80,7 @@ def main() -> int:
     p.add_argument("--mock", action="store_true", help="run against canned data, no node")
     p.add_argument("--rpc-user")
     p.add_argument("--rpc-password")
+    p.add_argument("--rpc-url", help="full RPC URL, e.g. the Z3 router at http://127.0.0.1:8181")
     p.add_argument("--rpc-host", default="127.0.0.1")
     p.add_argument("--rpc-port", type=int)
     p.add_argument("--network", default="regtest", choices=["mainnet", "testnet", "regtest"])
@@ -100,12 +101,10 @@ def main() -> int:
         args.account = args.account or ACCOUNT_UUID
         print("[mock mode - canned data, no node contacted]\n")
     else:
-        if not (args.rpc_user and args.rpc_password):
-            p.error("--rpc-user and --rpc-password are required unless --mock is set")
         if not args.address:
             p.error("at least one --address is required")
         rpc = ZcashClient(args.rpc_user, args.rpc_password, args.rpc_host,
-                          args.rpc_port, args.network)
+                          args.rpc_port, args.network, url=args.rpc_url)
         key, addresses = args.viewing_key or "(not supplied)", args.address
 
         try:

@@ -1,113 +1,184 @@
-# Bringing up zcashd in regtest
+# Running Clearview against a real node — step by step
 
-zcashd does **not** run on Windows (Zcash docs: *"We do not currently support Zcashd & Zcash-cli on
-Windows"*; Windows is Tier 3, no official binaries). Use WSL2 or a Linux VM.
+Every command below runs **inside the Codespace terminal**, not on Windows. Nothing here touches
+your laptop.
 
-**regtest is a private local chain** — blocks mined on demand, instantly. No peers, no initial
-block download, no faucet, no sync wait, and it avoids the OOM that kills zcashd on 4GB machines
-during IBD (`zcash/zcash#5936`), because regtest never performs one.
-
----
-
-## Option A — WSL2 (needs admin once)
-
-In an **administrator** PowerShell:
-
-```powershell
-wsl --install -d Ubuntu
-```
-
-Reboot when prompted. Then set a Linux username/password when Ubuntu first opens.
-
-## Option B — any Ubuntu VM or VPS
-
-Skip to the next section. Everything below runs inside Linux.
+`zcashd` is [End of Life](https://z.cash/support/zcashd-deprecation/) — its nodes halted on
+2026-07-18 and refuse to restart. The supported stack is **Zebra** (node) + **Zallet** (wallet),
+orchestrated by [ZcashFoundation/z3](https://github.com/ZcashFoundation/z3). On **regtest** it
+starts in seconds: instant blocks, no peers, no sync, no faucet.
 
 ---
 
-## Install zcashd (Debian/Ubuntu, officially supported)
+## Step 0 — Rebuild the Codespace
+
+The devcontainer changed, so the old container has the dead zcashd setup in it.
+
+1. Open <https://github.com/HarshPatel0x07/clearview>
+2. **Code** → **Codespaces** tab → click your existing codespace to open it
+3. Press **F1** (or `Ctrl+Shift+P`) → type **"Rebuild Container"** → **Codespaces: Rebuild
+   Container**
+4. Confirm. It takes 3–5 minutes
+
+If you'd rather start clean: delete the old codespace from the Codespaces tab and create a new one.
+
+**Check it worked** — in the Codespace terminal:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y apt-transport-https wget gnupg2
-
-wget -qO - https://apt.z.cash/zcash.asc | gpg --import
-gpg --export 3FE63B67F85EA808DE9B880E6DEF3BAF272766C0 \
-  | sudo tee /usr/share/keyrings/zcash.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/zcash.gpg] https://apt.z.cash/ bookworm main" \
-  | sudo tee /etc/apt/sources.list.d/zcash.list
-
-sudo apt-get update && sudo apt-get install -y zcash
-zcash-fetch-params            # one-time, downloads the proving parameters
+docker --version
 ```
 
-Verify the key fingerprint against https://z.cash/download.html before trusting it. If the release
-codename differs on your distro, substitute it for `bookworm`.
+Docker must be present; the devcontainer now requests docker-in-docker. If that command fails, the
+rebuild didn't pick up the new config — re-run step 3.
 
-## Configure and start
+---
+
+## Step 1 — Confirm Clearview itself works
+
+Before involving a node at all:
 
 ```bash
-mkdir -p ~/.zcash
-cp /path/to/clearview/regtest/zcash.conf ~/.zcash/zcash.conf
-# edit rpcpassword first
-zcashd -daemon
-zcash-cli getblockchaininfo        # expect "chain": "regtest"
+cd /workspaces/clearview
+python -m unittest discover -s tests
+python scripts/prove_spine.py --mock
 ```
 
-## Seed a demo chain
+Expect **16 tests OK**, then a reconciled ledger table. This proves the container is sane and
+separates "environment broken" from "node broken" later.
+
+---
+
+## Step 2 — First-time Z3 setup
+
+The devcontainer already cloned Z3 to `~/z3`. **This init script is required** — `docker compose
+up` alone is not enough.
 
 ```bash
-# Coinbase needs 100 confirmations before it can be spent.
-zcash-cli generate 101
-
-# A shielded account and address for the organisation being audited.
-ACCOUNT=$(zcash-cli z_getnewaccount | python3 -c "import sys,json;print(json.load(sys.stdin)['account'])")
-ZADDR=$(zcash-cli z_getaddressforaccount $ACCOUNT | python3 -c "import sys,json;print(json.load(sys.stdin)['address'])")
-echo "org address: $ZADDR"
-
-# Move funds from the transparent coinbase into the shielded pool.
-TADDR=$(zcash-cli getnewaddress)
-zcash-cli z_shieldcoinbase "*" "$ZADDR"
-zcash-cli generate 5
-
-# Donations, with memos - these become the ledger.
-zcash-cli z_sendmany "$ZADDR" \
-  '[{"address":"'"$ZADDR"'","amount":2.5,"memo":"'$(echo -n "Donation - Q3 appeal" | xxd -p | tr -d '\n')'"}]'
-zcash-cli generate 1
+cd ~/z3
+./scripts/regtest-init.sh
 ```
 
-Check progress with `zcash-cli z_getoperationstatus` — `z_sendmany` is asynchronous.
+It does six things: copies the per-network config templates, generates Zallet's encryption
+identity, injects the Zallet RPC password hash, starts Zebra in regtest with Canopy at height 1 and
+NU5–NU6.3 at height 2, mines 2 blocks to activate Ironwood, then initialises the Zallet wallet.
 
-## Export the viewing key — the whole point
+Takes a few minutes. The rpc-router **builds from source on first run**; Zebra and Zallet use
+pre-built images.
+
+---
+
+## Step 3 — Start the stack
 
 ```bash
-zcash-cli z_exportviewingkey "$ZADDR"
+cd ~/z3
+docker compose --env-file .env.regtest up -d
+docker compose --env-file .env.regtest ps
 ```
 
-That string is what gets handed to the auditor. **It carries no spending authority.**
+Every service should read `running` or `healthy`. If one is restarting:
 
-## Run Clearview against it
+```bash
+docker compose --env-file .env.regtest logs --tail=50 zallet
+```
+
+### Endpoints
+
+| Service | URL | Use |
+|---|---|---|
+| **rpc-router** | `http://localhost:8181` | **What Clearview talks to.** Routes each method to Zebra or Zallet automatically |
+| Zebra RPC | `http://localhost:29232` | Direct node access |
+| Zallet RPC | `http://localhost:50232` | Direct wallet access |
+| Zaino gRPC | `localhost:28137` | lightwalletd-compatible; needs `--profile indexer` |
+
+Default rpc-router password is `zebra`, overridable with `Z3_REGTEST_RPC_ROUTER_PASSWORD`.
+
+**Check the router is up:**
+
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"getblockchaininfo","params":[],"id":1}' \
+  http://127.0.0.1:8181
+```
+
+Expect JSON with `"chain":"regtest"`. Then confirm the wallet answers too:
+
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"getwalletinfo","params":[],"id":2}' \
+  http://127.0.0.1:8181
+```
+
+Two different services behind one port — that is the router doing its job.
+
+---
+
+## Step 4 — Seed a demo ledger
+
+```bash
+cd /workspaces/clearview
+bash regtest/seed-demo.sh
+```
+
+It mines blocks, shields coinbase into an account, sends four memo'd payments, and prints **the
+viewing key plus the exact command for step 5**.
+
+`z_sendmany` is asynchronous, so the script polls `z_getoperationstatus`. Apparent hanging is
+normal; regtest only mines when told.
+
+---
+
+## Step 5 — The moment of truth
+
+Paste the command the seed script printed. It looks like:
 
 ```bash
 python scripts/prove_spine.py \
-  --rpc-user clearview --rpc-password <yours> --network regtest \
-  --viewing-key <uview1...> --address <ztestsapling1...>
+  --rpc-url http://127.0.0.1:8181 \
+  --viewing-key 'uview1...' \
+  --address 'ztestsapling1...' \
+  --account '<account-uuid>'
 ```
 
-Success looks like the `--mock` output: every receipt, payment and change entry classified, a
-running balance, and `RECONCILED` against `z_getbalanceforviewingkey`.
+Success is the same table as `--mock`, but built from a real chain: every receipt, payment and
+change entry classified, a running balance, and **RECONCILED** at the bottom.
 
-### Reaching WSL from Windows
+That is the thesis proven. Week 1 done.
 
-zcashd binds `127.0.0.1` inside WSL2, which Windows can usually reach on the same address. If not,
-run the script inside WSL, or add `rpcbind=0.0.0.0` plus `rpcallowip=<windows-ip>` — acceptable
-only on a throwaway regtest chain, never on a node holding real funds.
+---
 
-## Troubleshooting
+## Traps worth knowing
 
-| Symptom | Fix |
-|---|---|
-| `Cannot reach zcashd` | Is `zcashd -daemon` running? Check `~/.zcash/regtest/debug.log` |
-| `z_sendmany` seems to hang | It is async. Poll `zcash-cli z_getoperationstatus` |
-| Amounts never confirm | regtest only mines when told: `zcash-cli generate 1` |
-| `could not load param file` | Run `zcash-fetch-params` |
-| Killed during startup | Only expected during IBD, which regtest avoids. Check available RAM |
+**Use the `zallet-zaino` binary for regtest.** The default `zebra-state` backend does **not**
+support regtest — it reads a co-located zebrad's state directly and needs zebrad compiled with the
+non-default `indexer` feature. Z3's regtest overlay handles this, but if you run Zallet by hand,
+this is the mistake to avoid (zallet#538).
+
+**Zallet is beta (v0.1.0-beta.3).** Expect rough edges. Some viewing-key RPCs only landed recently
+— `z_importviewingkey` merged 2026-07-26, and the published status matrix still lists it as "not yet
+implemented". Trust the running node over the docs.
+
+**`z_getbalanceforviewingkey` no longer exists.** Zallet replaces it with
+`z_getbalanceforaccount`, because an imported viewing key becomes an account with a UUID
+(zallet#74). That is why `--account` is a separate flag.
+
+**JSON-RPC 2.0, not 1.0.** zcashd spoke 1.0; the Z3 router and Zallet use 2.0. Clearview's client
+sends 2.0.
+
+## Stop the codespace when you finish
+
+**Codespaces tab → `...` → Stop codespace.** Free quota is 120 core-hours/month, which is 60 hours
+on a 2-core machine. It auto-stops after 30 minutes idle, but leaving it running overnight is how
+the quota disappears.
+
+## If step 5 fails
+
+Send me the error plus the raw RPC response:
+
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"z_listaccounts","params":[],"id":1}' \
+  http://127.0.0.1:8181
+```
+
+The classification logic is unlikely to be wrong — 16 tests cover it. What can differ is field
+names or shapes, which is parsing, and quick to fix.

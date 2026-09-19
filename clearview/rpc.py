@@ -13,8 +13,18 @@ import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
-# zcashd RPC ports are 100 below the Bitcoin equivalents.
-DEFAULT_PORTS = {"mainnet": 8232, "testnet": 18232, "regtest": 18232}
+# Z3 exposes explicit, globally unique host ports so mainnet, testnet and
+# regtest can all run at once. The rpc-router is the usual target: it forwards
+# each method to Zebra or Zallet based on the method name.
+Z3_REGTEST_PORTS = {
+    "router": 8181,   # JSON-RPC router (Zebra + Zallet) - use this
+    "zebra": 29232,   # direct Zebra JSON-RPC
+    "zallet": 50232,  # direct Zallet JSON-RPC
+    "zaino": 28137,   # lightwalletd-compatible gRPC, `indexer` profile
+}
+
+# Defaults point at the Z3 regtest router rather than the dead zcashd ports.
+DEFAULT_PORTS = {"mainnet": 8181, "testnet": 8181, "regtest": 8181}
 
 
 class RPCError(RuntimeError):
@@ -37,32 +47,37 @@ class ZcashClient:
 
     def __init__(
         self,
-        user: str,
-        password: str,
+        user: str | None = None,
+        password: str | None = None,
         host: str = "127.0.0.1",
         port: int | None = None,
         network: str = "regtest",
         timeout: int = 60,
+        url: str | None = None,
     ) -> None:
-        self.url = f"http://{host}:{port or DEFAULT_PORTS[network]}/"
-        self._auth = base64.b64encode(f"{user}:{password}".encode()).decode()
+        # `url` wins, so callers can point straight at the Z3 rpc-router, which
+        # forwards each method to Zebra or Zallet as appropriate.
+        self.url = url or f"http://{host}:{port or DEFAULT_PORTS[network]}/"
+        self._auth = (
+            base64.b64encode(f"{user}:{password}".encode()).decode()
+            if user is not None and password is not None
+            else None
+        )
         self.timeout = timeout
         self._id = 0
 
     def call(self, method: str, *params: Any) -> Any:
         self._id += 1
+        # JSON-RPC 2.0. zcashd spoke 1.0; the Z3 rpc-router and Zallet use 2.0.
         payload = json.dumps(
-            {"jsonrpc": "1.0", "id": self._id, "method": method, "params": list(params)}
+            {"jsonrpc": "2.0", "id": self._id, "method": method, "params": list(params)}
         ).encode()
 
-        req = urllib.request.Request(
-            self.url,
-            data=payload,
-            headers={
-                "Content-Type": "text/plain",
-                "Authorization": f"Basic {self._auth}",
-            },
-        )
+        headers = {"Content-Type": "application/json"}
+        if self._auth:
+            headers["Authorization"] = f"Basic {self._auth}"
+
+        req = urllib.request.Request(self.url, data=payload, headers=headers)
 
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
