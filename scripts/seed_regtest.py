@@ -52,28 +52,49 @@ def compose(z3_dir: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def wait_for_wallet(rpc: ZcashClient, timeout: int = 180) -> None:
-    """Zallet's own guide: compare wallet_tip with node_tip before trusting it.
+def wait_for_wallet(rpc: ZcashClient, timeout: int = 180, quiet: bool = False) -> None:
+    """Wait until the wallet has caught up with the node.
 
-    Calling wallet methods mid-sync is what produces a 502 from the router.
+    `getwalletstatus` is the documented way to compare `wallet_tip` with
+    `node_tip`, but it returns a 502 through the rpc-router on the pinned
+    Zallet build. So it is treated as best-effort: if it is unavailable, fall
+    back to polling a method that does work, which at least proves the wallet
+    is answering before we rely on it.
     """
     deadline = time.time() + timeout
-    last = ""
+    used_status = True
     while time.time() < deadline:
         try:
             status = rpc.call("getwalletstatus")
-        except (RPCError, RuntimeError) as err:
-            last = str(err)
-            time.sleep(2)
-            continue
+        except (RPCError, RuntimeError):
+            used_status = False
+            break
         wallet_tip = (status.get("wallet_tip") or {}).get("height", status.get("wallet_tip"))
         node_tip = (status.get("node_tip") or {}).get("height", status.get("node_tip"))
         if wallet_tip is not None and wallet_tip == node_tip:
-            info(f"wallet synced at height {wallet_tip}")
+            if not quiet:
+                info(f"wallet synced at height {wallet_tip}")
             return
-        info(f"syncing... wallet {wallet_tip} / node {node_tip}")
+        if not quiet:
+            info(f"syncing... wallet {wallet_tip} / node {node_tip}")
         time.sleep(2)
-    raise TimeoutError(f"wallet did not sync within {timeout}s. last error: {last}")
+
+    if used_status:
+        raise TimeoutError(f"wallet did not reach the node tip within {timeout}s")
+
+    # Fallback: getwalletstatus is unusable on this build.
+    while time.time() < deadline:
+        try:
+            rpc.call("z_listaccounts")
+            if not quiet:
+                info("wallet responding (getwalletstatus unavailable on this build)")
+            # Scanning lags block arrival slightly; give it a moment to settle.
+            time.sleep(3)
+            return
+        except (RPCError, RuntimeError) as err:
+            last = err
+            time.sleep(2)
+    raise TimeoutError(f"wallet never answered within {timeout}s. last error: {last}")
 
 
 def wait_for_operation(rpc: ZcashClient, opid: str, timeout: int = 300) -> dict:
