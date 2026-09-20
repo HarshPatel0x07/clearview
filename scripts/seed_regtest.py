@@ -92,25 +92,41 @@ def wait_for_operation(rpc: ZcashClient, opid: str, timeout: int = 300) -> dict:
 
 
 def set_miner_address(z3_dir: Path, address: str) -> None:
-    """Point Zebra's coinbase at the wallet's Unified Address, then restart it."""
-    cfg = z3_dir / "config" / "regtest" / "zebra.toml"
-    if not cfg.exists():
-        raise FileNotFoundError(f"{cfg} not found - has regtest-init.sh been run?")
+    """Point Zebra's coinbase at the wallet's Unified Address, then restart it.
 
-    text = cfg.read_text()
-    if re.search(r"^\s*miner_address\s*=", text, re.M):
-        text = re.sub(r'^\s*miner_address\s*=.*$', f'miner_address = "{address}"', text, flags=re.M)
-    elif re.search(r"^\[mining\]", text, re.M):
-        text = re.sub(r"^\[mining\]", f'[mining]\nminer_address = "{address}"', text, flags=re.M)
+    z3 configures Zebra by **environment variable**, not by the TOML file:
+    `.env.regtest` ships `ZEBRA_MINING__MINER_ADDRESS` set to a transparent
+    address that is not in our wallet. The env var wins over
+    `config/regtest/zebra.toml`, so editing the TOML has no effect - the
+    variable has to be replaced.
+
+    Zebra accepts a Unified Address here and pays the reward to a single
+    receiver, preferring Orchard, so the coinbase lands straight in the
+    shielded account.
+    """
+    env_file = z3_dir / ".env.regtest"
+    if not env_file.exists():
+        raise FileNotFoundError(f"{env_file} not found")
+
+    text = env_file.read_text()
+    key = "ZEBRA_MINING__MINER_ADDRESS"
+    if re.search(rf"^{key}=", text, re.M):
+        current = re.search(rf"^{key}=(.*)$", text, re.M).group(1).strip()
+        if current == address:
+            info("miner address already points at this account")
+            return
+        # Keep the shipped value visible rather than silently discarding it.
+        text = re.sub(rf"^{key}=.*$",
+                      f"# clearview: was {current}\n{key}={address}", text, flags=re.M)
     else:
-        text = text.rstrip() + f'\n\n[mining]\nminer_address = "{address}"\n'
-    cfg.write_text(text)
-    info(f"zebra.toml miner_address -> {address[:28]}...")
+        text = text.rstrip() + f"\n{key}={address}\n"
+    env_file.write_text(text)
+    info(f"{key} -> {address[:30]}...")
 
-    result = compose(z3_dir, "restart", "zebra")
+    result = compose(z3_dir, "up", "-d", "zebra")
     if result.returncode != 0:
-        raise RuntimeError(f"failed to restart Zebra:\n{result.stderr}")
-    info("Zebra restarted")
+        raise RuntimeError(f"failed to recreate Zebra:\n{result.stderr}")
+    info("Zebra recreated with the new miner address")
 
 
 def wait_for_zebra(rpc: ZcashClient, timeout: int = 120) -> int:
