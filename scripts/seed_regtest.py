@@ -2,20 +2,23 @@
 """Seed the Z3 regtest chain with a believable nonprofit ledger.
 
 Talks to the Z3 rpc-router, which forwards each method to Zebra (node) or
-Zallet (wallet) automatically. Replaces the old zcash-cli script: zcashd is
-End of Life and no longer part of the stack.
+Zallet (wallet). zcashd is End of Life and is not part of this stack.
 
-Produces exactly the shape Clearview must classify - donations received, a
-vendor payment out, and the change that returns - then exports the viewing key
-and prints the command to prove the thesis against it.
+Funding on regtest works by pointing Zebra's `miner_address` at the wallet's
+own Unified Address. Zebra pays the block reward to a single receiver,
+preferring Orchard, so the coinbase lands directly in the shielded account and
+no separate shielding step is needed. Because that address only exists after
+the account does, the script configures Zebra and restarts it mid-run.
 
     python scripts/seed_regtest.py
-    python scripts/seed_regtest.py --rpc-url http://127.0.0.1:8181
+    python scripts/seed_regtest.py --z3-dir ~/z3 --rpc-url http://127.0.0.1:8181
 """
 
 from __future__ import annotations
 
 import argparse
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -25,107 +28,168 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from clearview.models import to_zec  # noqa: E402
 from clearview.rpc import RPCError, ZcashClient  # noqa: E402
 
-DONATIONS = [
-    ("2.5", "Donation - Q3 appeal"),
-    ("1.0", "Monthly giving"),
-    ("0.25", "Anonymous gift"),
-]
-VENDOR_PAYMENT = ("0.75", "Invoice 2026-114 - venue hire")
+DONATIONS = [(2.5, "Donation - Q3 appeal"),
+             (1.0, "Monthly giving"),
+             (0.25, "Anonymous gift")]
+VENDOR_PAYMENT = (0.75, "Invoice 2026-114 - venue hire")
+
+# Coinbase needs 100 confirmations before it can be spent.
+COINBASE_MATURITY = 100
 
 
 def step(msg: str) -> None:
     print(f"\n==> {msg}", flush=True)
 
 
-def hex_memo(text: str) -> str:
-    return text.encode().hex()
+def info(msg: str) -> None:
+    print(f"    {msg}", flush=True)
 
 
-def wait_for_operation(rpc: ZcashClient, opid: str, timeout: int = 180) -> dict:
-    """z_sendmany and z_shieldcoinbase are asynchronous; poll to completion."""
+def compose(z3_dir: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["docker", "compose", "--env-file", ".env.regtest", *args],
+        cwd=z3_dir, capture_output=True, text=True,
+    )
+
+
+def wait_for_wallet(rpc: ZcashClient, timeout: int = 180) -> None:
+    """Zallet's own guide: compare wallet_tip with node_tip before trusting it.
+
+    Calling wallet methods mid-sync is what produces a 502 from the router.
+    """
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        try:
+            status = rpc.call("getwalletstatus")
+        except (RPCError, RuntimeError) as err:
+            last = str(err)
+            time.sleep(2)
+            continue
+        wallet_tip = (status.get("wallet_tip") or {}).get("height", status.get("wallet_tip"))
+        node_tip = (status.get("node_tip") or {}).get("height", status.get("node_tip"))
+        if wallet_tip is not None and wallet_tip == node_tip:
+            info(f"wallet synced at height {wallet_tip}")
+            return
+        info(f"syncing... wallet {wallet_tip} / node {node_tip}")
+        time.sleep(2)
+    raise TimeoutError(f"wallet did not sync within {timeout}s. last error: {last}")
+
+
+def wait_for_operation(rpc: ZcashClient, opid: str, timeout: int = 300) -> dict:
+    """z_sendmany is asynchronous; poll to completion."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         results = rpc.call("z_getoperationstatus", [opid])
-        if not results:
-            time.sleep(2)
-            continue
-        status = results[0].get("status")
-        if status == "success":
-            return rpc.call("z_getoperationresult", [opid])[0]
-        if status == "failed":
-            detail = results[0].get("error", {})
-            raise RuntimeError(f"operation {opid} failed: {detail}")
+        if results:
+            status = results[0].get("status")
+            if status == "success":
+                return rpc.call("z_getoperationresult", [opid])[0]
+            if status == "failed":
+                raise RuntimeError(f"{opid} failed: {results[0].get('error')}")
         time.sleep(2)
-    raise TimeoutError(f"operation {opid} did not finish within {timeout}s")
+    raise TimeoutError(f"{opid} did not finish within {timeout}s")
 
 
-def mine(rpc: ZcashClient, blocks: int) -> None:
-    """regtest only produces blocks on demand."""
-    rpc.call("generate", blocks)
+def set_miner_address(z3_dir: Path, address: str) -> None:
+    """Point Zebra's coinbase at the wallet's Unified Address, then restart it."""
+    cfg = z3_dir / "config" / "regtest" / "zebra.toml"
+    if not cfg.exists():
+        raise FileNotFoundError(f"{cfg} not found - has regtest-init.sh been run?")
+
+    text = cfg.read_text()
+    if re.search(r"^\s*miner_address\s*=", text, re.M):
+        text = re.sub(r'^\s*miner_address\s*=.*$', f'miner_address = "{address}"', text, flags=re.M)
+    elif re.search(r"^\[mining\]", text, re.M):
+        text = re.sub(r"^\[mining\]", f'[mining]\nminer_address = "{address}"', text, flags=re.M)
+    else:
+        text = text.rstrip() + f'\n\n[mining]\nminer_address = "{address}"\n'
+    cfg.write_text(text)
+    info(f"zebra.toml miner_address -> {address[:28]}...")
+
+    result = compose(z3_dir, "restart", "zebra")
+    if result.returncode != 0:
+        raise RuntimeError(f"failed to restart Zebra:\n{result.stderr}")
+    info("Zebra restarted")
+
+
+def wait_for_zebra(rpc: ZcashClient, timeout: int = 120) -> int:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            return rpc.call("getblockchaininfo")["blocks"]
+        except (RPCError, RuntimeError):
+            time.sleep(2)
+    raise TimeoutError("Zebra did not come back after restart")
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--rpc-url", default="http://127.0.0.1:8181",
-                   help="Z3 rpc-router (default: %(default)s)")
+    p.add_argument("--rpc-url", default="http://127.0.0.1:8181")
     p.add_argument("--rpc-user")
     p.add_argument("--rpc-password")
+    p.add_argument("--z3-dir", default=str(Path.home() / "z3"))
     p.add_argument("--account-name", default="clearview-demo")
     args = p.parse_args()
 
+    z3_dir = Path(args.z3_dir).expanduser()
     rpc = ZcashClient(args.rpc_user, args.rpc_password, url=args.rpc_url)
 
     step("checking the stack")
     try:
-        info = rpc.call("getblockchaininfo")
-        print(f"    Zebra  : {info.get('chain')} chain at height {info.get('blocks')}")
+        chain = rpc.call("getblockchaininfo")
+        info(f"Zebra  : {chain.get('chain')} chain at height {chain.get('blocks')}")
     except (RPCError, RuntimeError) as err:
-        print(f"Cannot reach Zebra via the router: {err}", file=sys.stderr)
-        print("Is the stack up?  cd ~/z3 && docker compose --env-file .env.regtest ps",
+        print(f"Cannot reach Zebra: {err}\n"
+              f"Is the stack up?  cd {z3_dir} && docker compose --env-file .env.regtest ps",
               file=sys.stderr)
         return 2
-    try:
-        rpc.call("getwalletinfo")
-        print("    Zallet : responding")
-    except (RPCError, RuntimeError) as err:
-        print(f"Router reached Zebra but not Zallet: {err}", file=sys.stderr)
-        return 2
+
+    step("waiting for Zallet to catch up with the node")
+    wait_for_wallet(rpc)
 
     step("creating the organisation's account")
-    # Zallet requires an account name, unlike zcashd.
-    try:
-        account = rpc.call("z_getnewaccount", args.account_name)
-    except RPCError:
-        account = rpc.call("z_getnewaccount")
-    account_uuid = account.get("account_uuid")
-    account_ref = account_uuid or account.get("account")
-    print(f"    account: {account_ref}")
+    account = rpc.call("z_getnewaccount", args.account_name)
+    account_ref = account.get("account_uuid") or account.get("account")
+    info(f"account: {account_ref}")
 
-    addr_info = rpc.call("z_getaddressforaccount", account_ref)
-    zaddr = addr_info["address"]
-    print(f"    address: {zaddr}")
+    zaddr = rpc.call("z_getaddressforaccount", account_ref)["address"]
+    info(f"address: {zaddr}")
 
-    step("mining to maturity (coinbase needs 100 confirmations)")
-    mine(rpc, 105)
-    print(f"    height : {rpc.call('getblockchaininfo')['blocks']}")
+    step("pointing Zebra's coinbase at that address")
+    set_miner_address(z3_dir, zaddr)
+    wait_for_zebra(rpc)
 
-    step("shielding coinbase into the account")
-    shield = rpc.call("z_shieldcoinbase", "*", zaddr)
-    opid = shield.get("opid") if isinstance(shield, dict) else shield
-    wait_for_operation(rpc, opid)
-    mine(rpc, 3)
-    print("    shielded")
+    step(f"mining {COINBASE_MATURITY + 5} blocks so the reward matures")
+    rpc.call("generate", COINBASE_MATURITY + 5)
+    info(f"height : {rpc.call('getblockchaininfo')['blocks']}")
+    wait_for_wallet(rpc)
 
-    def send(amount: str, memo: str) -> None:
-        recipients = [{"address": zaddr, "amount": float(amount), "memo": hex_memo(memo)}]
-        # Zallet: fee must be null (ZIP 317 always). Privacy policy must permit
-        # the revealed amounts that shielding to one's own address implies.
-        result = rpc.call("z_sendmany", zaddr, recipients, 1, None, "AllowRevealedAmounts")
-        opid_ = result.get("opid") if isinstance(result, dict) else result
-        wait_for_operation(rpc, opid_)
-        mine(rpc, 1)
-        print(f"    {amount:>5} ZEC  \"{memo}\"")
+    balance = rpc.call("z_getbalanceforaccount", account_ref, 1)
+    pools = balance.get("pools") or {}
+    total = sum(int(v.get("valueZat", 0)) for v in pools.values())
+    info(f"funded : {to_zec(total)} ZEC across {', '.join(pools) or 'no pools'}")
+    if total == 0:
+        print("\nThe account received no coinbase. Check Zebra picked up the miner "
+              "address:\n  grep -A2 '\\[mining\\]' "
+              f"{z3_dir}/config/regtest/zebra.toml", file=sys.stderr)
+        return 1
+
+    def send(amount: float, memo: str) -> None:
+        recipients = [{"address": zaddr, "amount": amount, "memo": memo.encode().hex()}]
+        try:
+            result = rpc.call("z_sendmany", zaddr, recipients)
+        except RPCError as err:
+            # Shielded-to-self can still trip the default privacy policy.
+            if "privacy" not in err.message.lower():
+                raise
+            result = rpc.call("z_sendmany", zaddr, recipients, None, None, "AllowRevealedAmounts")
+        opid = result.get("opid") if isinstance(result, dict) else result
+        wait_for_operation(rpc, opid)
+        rpc.call("generate", 1)
+        wait_for_wallet(rpc)
+        info(f'{amount:>5} ZEC  "{memo}"')
 
     step("seeding the ledger")
     for amount, memo in DONATIONS:
@@ -133,9 +197,9 @@ def main() -> int:
     send(*VENDOR_PAYMENT)
 
     step("balance according to the node")
-    balance = rpc.call("z_getbalanceforaccount", account_ref, 1)
-    for pool, detail in (balance.get("pools") or {}).items():
-        print(f"    {pool:<12} {to_zec(int(detail.get('valueZat', 0)))}")
+    for pool, detail in ((rpc.call("z_getbalanceforaccount", account_ref, 1)
+                          .get("pools")) or {}).items():
+        info(f"{pool:<12} {to_zec(int(detail.get('valueZat', 0)))}")
 
     step("viewing key - this is what the auditor receives")
     viewing_key = rpc.call("z_exportviewingkey", zaddr)
