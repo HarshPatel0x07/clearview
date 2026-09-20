@@ -76,6 +76,45 @@ def compose(z3_dir: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def sync_gap(rpc: ZcashClient) -> int | None:
+    """How many blocks the wallet is behind, or None if it is caught up.
+
+    `getwalletstatus` is the documented way to ask, but it closes the
+    connection on this build. `z_getnotescount` answers instead: while the
+    wallet is behind it returns error -10 whose message states the gap, and
+    once caught up it returns a normal result. So a working method is used to
+    read the state that the broken one was meant to report.
+    """
+    try:
+        rpc.call("z_getnotescount")
+        return None
+    except RPCError as err:
+        if err.code != -10:
+            raise
+        match = re.search(r"(\d+)\s+blocks? behind", err.message)
+        return int(match.group(1)) if match else -1
+
+
+def wait_for_sync(rpc: ZcashClient, timeout: int = 240, quiet: bool = False) -> None:
+    """Block until the wallet has caught up, reporting the gap as it closes."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        gap = sync_gap(rpc)
+        if gap is None:
+            if not quiet:
+                info("wallet synced")
+            return
+        if gap != last and not quiet:
+            info(f"wallet {gap} block(s) behind the tip")
+            last = gap
+        time.sleep(2)
+    raise TimeoutError(
+        f"wallet stayed {last} block(s) behind for {timeout}s. On an empty wallet "
+        "Zallet's sync does not advance; creating an account should unblock it."
+    )
+
+
 def wait_for_wallet(rpc: ZcashClient, timeout: int = 180, quiet: bool = False) -> None:
     """Wait until the wallet has caught up with the node.
 
@@ -216,15 +255,16 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    step("waiting for Zallet to catch up with the node")
-    wait_for_wallet(rpc)
-
+    # Order matters. On an empty wallet Zallet's sync does not advance and its
+    # account-enumeration methods (z_listaccounts, getwalletstatus,
+    # z_listtransactions) close the connection. Creating an account first gives
+    # the scanner something to look for.
     step("creating the organisation's account")
-    account = rpc.call("z_getnewaccount", args.account_name)
+    account = wallet.call("z_getnewaccount", args.account_name)
     account_ref = account.get("account_uuid") or account.get("account")
     info(f"account: {account_ref}")
 
-    zaddr = rpc.call("z_getaddressforaccount", account_ref)["address"]
+    zaddr = wallet.call("z_getaddressforaccount", account_ref)["address"]
     info(f"address: {zaddr}")
 
     step("pointing Zebra's coinbase at that address")
@@ -234,9 +274,9 @@ def main() -> int:
     step(f"mining {COINBASE_MATURITY + 5} blocks so the reward matures")
     node.call("generate", COINBASE_MATURITY + 5)
     info(f"height : {node.call('getblockchaininfo')['blocks']}")
-    wait_for_wallet(rpc)
+    wait_for_sync(wallet)
 
-    balance = rpc.call("z_getbalanceforaccount", account_ref, 1)
+    balance = wallet.call("z_getbalanceforaccount", account_ref, 1)
     pools = balance.get("pools") or {}
     total = sum(int(v.get("valueZat", 0)) for v in pools.values())
     info(f"funded : {to_zec(total)} ZEC across {', '.join(pools) or 'no pools'}")
@@ -249,16 +289,16 @@ def main() -> int:
     def send(amount: float, memo: str) -> None:
         recipients = [{"address": zaddr, "amount": amount, "memo": memo.encode().hex()}]
         try:
-            result = rpc.call("z_sendmany", zaddr, recipients)
+            result = wallet.call("z_sendmany", zaddr, recipients)
         except RPCError as err:
             # Shielded-to-self can still trip the default privacy policy.
             if "privacy" not in err.message.lower():
                 raise
-            result = rpc.call("z_sendmany", zaddr, recipients, None, None, "AllowRevealedAmounts")
+            result = wallet.call("z_sendmany", zaddr, recipients, None, None, "AllowRevealedAmounts")
         opid = result.get("opid") if isinstance(result, dict) else result
         wait_for_operation(rpc, opid)
         node.call("generate", 1)
-        wait_for_wallet(rpc)
+        wait_for_sync(wallet, quiet=True)
         info(f'{amount:>5} ZEC  "{memo}"')
 
     step("seeding the ledger")
@@ -267,12 +307,12 @@ def main() -> int:
     send(*VENDOR_PAYMENT)
 
     step("balance according to the node")
-    for pool, detail in ((rpc.call("z_getbalanceforaccount", account_ref, 1)
+    for pool, detail in ((wallet.call("z_getbalanceforaccount", account_ref, 1)
                           .get("pools")) or {}).items():
         info(f"{pool:<12} {to_zec(int(detail.get('valueZat', 0)))}")
 
     step("viewing key - this is what the auditor receives")
-    viewing_key = rpc.call("z_exportviewingkey", zaddr)
+    viewing_key = wallet.call("z_exportviewingkey", zaddr)
     print(f"\n{viewing_key}\n")
     print("It carries NO spending authority.")
 
