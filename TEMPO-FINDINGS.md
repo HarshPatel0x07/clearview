@@ -198,7 +198,45 @@ deposit assembled from the library's own helpers reverts. The likely remaining c
 2. Deposits gated on something not visible from the RPC — an allowlist, or a zone not open to
    arbitrary depositors on testnet.
 
-**The cheapest way to settle it is to observe a working deposit.** Tempo's interactive guides
-perform zone deposits from a browser wallet; one successful deposit on the explorer gives the
-exact calldata to compare against. That is a five-minute answer versus an open-ended debugging
-session, and it is the next thing to do.
+### The documented signature reverts too
+
+The official guide's example is far smaller than what I had been sending:
+
+```ts
+const { receipt } = await Actions.zone.depositSync(rootClient, {
+  account: rootClient.account,
+  amount: parseUnits('100', 6),
+  token: pathUsd,
+  zoneId: ZONE_A.id,
+})
+```
+
+Four fields. `recipient`, `bouncebackRecipient`, `chainId`, `sender`, `portalAddress`, `encrypted`
+and `keyIndex` are all derived by the library — and `encryptedDepositSync` takes the same four, so
+calling `encryptDepositPayload` by hand is unnecessary.
+
+**This exact form still reverts.** Also ruled out since:
+
+* Allowance — re-approved the portal for 1,000,000 pathUSD; deposits of 100 and of 1 pathUSD both
+  still revert, so it is not the fee-on-top-of-amount theory.
+* Amount size — same revert at 100, 10 and 1 pathUSD.
+
+### The remaining hypothesis
+
+The interactive demo's **step 1** is *"Create or use a **passkey account** on the public chain"*,
+and its **step 2** is *"**Authorize private reads in Zone A**"* — a distinct step before the
+deposit in step 3.
+
+So either zone deposits require a **passkey (P256/WebAuthn) account** rather than a plain
+secp256k1 account, or the zone read authorization must be registered before a deposit is accepted.
+A plain secp256k1 account is otherwise fully functional here — the faucet, `approve`,
+`authorizeKey` and token minting all work with it — which is what makes this worth stating as a
+hypothesis rather than a conclusion.
+
+Tempo Labs invite design partners on Zones at `tempo.xyz/contact`. Given the revert carries no
+reason string, asking is cheaper than continuing to vary arguments.
+
+### Note for anyone reading this later
+
+`parseUnits` is not exported from the `viem` root in `3.0.0-next.10`; importing it throws at module
+load. Use integer base units directly (`100_000_000n` for 100 at 6 decimals).
