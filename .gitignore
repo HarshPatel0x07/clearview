@@ -4,3 +4,8 @@ __pycache__/
 venv/
 *.log
 .env
+
+# Testnet key material. Faucet tokens only, but never commit keys.
+.secrets/
+node_modules/
+dist/
