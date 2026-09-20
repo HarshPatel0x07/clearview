@@ -116,14 +116,16 @@ Two different services behind one port — that is the router doing its job.
 
 ```bash
 cd /workspaces/clearview
-bash regtest/seed-demo.sh
+python scripts/seed_regtest.py
 ```
 
-It mines blocks, shields coinbase into an account, sends four memo'd payments, and prints **the
-viewing key plus the exact command for step 5**.
+It talks to the rpc-router, creates an account, mines to maturity, shields the coinbase, sends
+four memo'd payments, then prints **the viewing key plus the exact command for step 5**.
 
-`z_sendmany` is asynchronous, so the script polls `z_getoperationstatus`. Apparent hanging is
-normal; regtest only mines when told.
+`z_sendmany` and `z_shieldcoinbase` are asynchronous, so the script polls `z_getoperationstatus`.
+Apparent hanging is normal; regtest only mines when told.
+
+The old `seed-demo.sh` used `zcash-cli` and has been removed - zcashd is not part of this stack.
 
 ---
 
