@@ -8,6 +8,7 @@ protocol, so that logic is fully testable without a running node.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -91,7 +92,17 @@ class ZcashClient:
                 raise RPCError(err.code, raw.strip() or err.reason) from err
         except urllib.error.URLError as err:
             raise RuntimeError(
-                f"Cannot reach zcashd at {self.url} - is the node running? ({err.reason})"
+                f"Cannot reach the node at {self.url} - is it running? ({err.reason})"
+            ) from err
+        except (http.client.HTTPException, OSError) as err:
+            # Some Zallet methods close the connection instead of answering;
+            # `getwalletstatus` does this on the pinned build. That surfaces as
+            # RemoteDisconnected, which is neither URLError nor RPCError, so
+            # without this it escapes every caller's error handling.
+            raise RuntimeError(
+                f"{method} closed the connection without responding "
+                f"({type(err).__name__}: {err}). The method is likely broken on "
+                "this build; try an alternative."
             ) from err
 
         if body.get("error"):

@@ -1,0 +1,13 @@
+# Normalise to LF in the repository and on checkout.
+#
+# This project is authored on Windows but runs on Linux (Codespaces, CI). Shell
+# scripts checked out with CRLF fail immediately and confusingly: bash reports
+# `set: pipefail: invalid option name` and `$'\r': command not found`.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.toml text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf

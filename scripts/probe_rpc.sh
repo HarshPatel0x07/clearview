@@ -27,7 +27,7 @@ if [[ "${1:-}" == "--direct" ]]; then
   # at the configured password.
   # The Zallet image is distroless - no shell, no cat - so read the cookie out
   # of its volume with a mounted helper container instead of docker exec.
-  COOKIE=$(docker run --rm -v z3-regtest-zallet:/data busybox cat /data/.cookie 2>/dev/null | tr -d '
+  COOKIE=$(docker run --rm -v z3-regtest-zallet:/data busybox cat /data/.cookie 2>/dev/null | tr -d '
 ' || true)
   if [[ -n "$COOKIE" && "$COOKIE" == *:* ]]; then
     AUTH=(--user "$COOKIE")
