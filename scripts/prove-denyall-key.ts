@@ -26,6 +26,7 @@ import {
   Account,
   Actions,
   Chain,
+  KeyAuthorizationManager,
   Client,
   Storage,
   ZoneRpcAuthentication,
@@ -77,7 +78,7 @@ async function fund(address: string) {
 
 /** Mint a Zone RPC authorization token signed by `signer`. */
 async function mintZoneToken(
-  signer: { sign: (p: { payload: `0x${string}` }) => Promise<any>; address: string },
+  signer: { sign: (p: { hash: `0x${string}` }) => Promise<any>; address: string },
   zoneId: number,
   chainId: number,
 ) {
@@ -89,7 +90,7 @@ async function mintZoneToken(
     expiresAt: now + 3600,
   })
   const payload = ZoneRpcAuthentication.getSignPayload(auth)
-  const signature = await signer.sign({ payload })
+  const signature = await signer.sign({ hash: payload })
   return ZoneRpcAuthentication.serialize({ ...auth, signature } as any)
 }
 
@@ -136,7 +137,10 @@ async function main() {
   // mismatch" - an empty scope list without an empty limit list produces an
   // inconsistent restriction set that the keychain precompile reads as an admin
   // key. Together they mean: no call is permitted, on no token, for any amount.
-  const accessKey = Account.fromP256(P256.randomPrivateKey(), { access: account })
+  const accessKey = Account.fromP256(P256.randomPrivateKey(), {
+    access: account,
+    keyAuthorizationManager: KeyAuthorizationManager.memory(),
+  })
   // `address` is the account the key acts for; the key itself is accessKeyAddress.
   ok(`key ${(accessKey as any).accessKeyAddress} acting for ${accessKey.address}`)
   const hash = await Actions.accessKey.authorizeSync(client, {

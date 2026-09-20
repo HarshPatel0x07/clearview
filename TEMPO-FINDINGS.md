@@ -90,3 +90,48 @@ Auth token: `X-Authorization-Token`, magic bytes decode to `"TempoZoneRPC"`, ver
 
 `zoneModerato(n).nativeCurrency` is `{ name: 'USD', symbol: 'USD', decimals: 6 }`. All amounts
 are held as integer base units; 6 decimals, not 18.
+
+## Account `sign()` takes `{ hash }`, not `{ payload }`
+
+```ts
+const payload = ZoneRpcAuthentication.getSignPayload(auth)
+await accessKey.sign({ payload })      // throws: Cannot read properties of undefined (reading 'replace')
+await accessKey.sign({ hash: payload }) // correct
+```
+
+The thrown error points into `ox/core/Hex.ts` and looks like a library fault. It is not: `hash`
+is undefined, and `Hex` calls `.replace` on it. Root accounts tolerate `{ payload }`, access-key
+accounts do not, which makes the mistake easy to miss until you use an access key.
+
+An access key also needs a manager, or signing fails the same way:
+
+```ts
+Account.fromP256(P256.randomPrivateKey(), {
+  access: account,
+  keyAuthorizationManager: KeyAuthorizationManager.memory(),
+})
+```
+
+The resulting envelope begins `0x04` followed by the **account** address, so it carries the
+identity the zone resolves against.
+
+## Zone access is account-level, not key-level — 401 vs 403 matters
+
+Probing Zone A with three different signers:
+
+| Signer | Result |
+|---|---|
+| main account root key | **HTTP 403** |
+| unrestricted access key | **HTTP 403** |
+| deny-all access key | **HTTP 403** |
+
+Unauthenticated requests return **401**; these return **403**. So the token was parsed and the
+signature verified, and access was then refused. The deny-all key is treated **exactly like the
+account's own root key**, which is the useful part: the restriction is not what blocks the read.
+
+What blocks it is that the account has no presence in the zone. It has never deposited, so the
+zone does not recognise it. The next step is `Actions.zone.deposit*` from the public chain, then
+retry — not more work on key scoping.
+
+**Read 401 as "credentials rejected" and 403 as "credentials fine, account not permitted".**
+Conflating them cost time here.
