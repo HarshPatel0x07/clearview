@@ -45,6 +45,30 @@ def info(msg: str) -> None:
     print(f"    {msg}", flush=True)
 
 
+def read_cookie() -> str:
+    """Read Zallet's RPC cookie out of its Docker volume.
+
+    The Zallet image is distroless - no shell, no `cat` - so `docker exec` will
+    not work; mount the volume into a helper container instead.
+
+    Doing this here rather than relying on an exported shell variable matters:
+    an empty credential makes Zallet answer 401 with an **empty body**, which
+    looks exactly like a crashed handler. That cost us a day.
+    """
+    result = subprocess.run(
+        ["docker", "run", "--rm", "-v", "z3-regtest-zallet:/data",
+         "busybox", "cat", "/data/.cookie"],
+        capture_output=True, text=True,
+    )
+    cookie = result.stdout.strip()
+    if ":" not in cookie:
+        raise RuntimeError(
+            "could not read Zallet's RPC cookie from the z3-regtest-zallet volume. "
+            f"docker said: {result.stderr.strip() or '(nothing)'}"
+        )
+    return cookie
+
+
 def compose(z3_dir: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["docker", "compose", "--env-file", ".env.regtest", *args],
@@ -168,15 +192,24 @@ def main() -> int:
     p.add_argument("--rpc-password")
     p.add_argument("--z3-dir", default=str(Path.home() / "z3"))
     p.add_argument("--account-name", default="clearview-demo")
+    p.add_argument("--cookie", help="Zallet RPC cookie; read from the volume if omitted")
     args = p.parse_args()
 
     z3_dir = Path(args.z3_dir).expanduser()
-    rpc = ZcashClient(args.rpc_user, args.rpc_password, url=args.rpc_url)
+
+    # Two endpoints on purpose:
+    #   node   - Zebra, for `generate`, reached through the rpc-router
+    #   wallet - Zallet directly, because the router reports methods as missing
+    #            when they are absent from its own older routing table
+    node = ZcashClient(args.rpc_user, args.rpc_password, url=args.rpc_url)
+    wallet = ZcashClient.from_cookie(args.cookie or read_cookie())
+    rpc = wallet  # wallet calls dominate
 
     step("checking the stack")
     try:
-        chain = rpc.call("getblockchaininfo")
+        chain = node.call("getblockchaininfo")
         info(f"Zebra  : {chain.get('chain')} chain at height {chain.get('blocks')}")
+        info("Zallet : reached directly with its RPC cookie")
     except (RPCError, RuntimeError) as err:
         print(f"Cannot reach Zebra: {err}\n"
               f"Is the stack up?  cd {z3_dir} && docker compose --env-file .env.regtest ps",
@@ -196,11 +229,11 @@ def main() -> int:
 
     step("pointing Zebra's coinbase at that address")
     set_miner_address(z3_dir, zaddr)
-    wait_for_zebra(rpc)
+    wait_for_zebra(node)
 
     step(f"mining {COINBASE_MATURITY + 5} blocks so the reward matures")
-    rpc.call("generate", COINBASE_MATURITY + 5)
-    info(f"height : {rpc.call('getblockchaininfo')['blocks']}")
+    node.call("generate", COINBASE_MATURITY + 5)
+    info(f"height : {node.call('getblockchaininfo')['blocks']}")
     wait_for_wallet(rpc)
 
     balance = rpc.call("z_getbalanceforaccount", account_ref, 1)
@@ -224,7 +257,7 @@ def main() -> int:
             result = rpc.call("z_sendmany", zaddr, recipients, None, None, "AllowRevealedAmounts")
         opid = result.get("opid") if isinstance(result, dict) else result
         wait_for_operation(rpc, opid)
-        rpc.call("generate", 1)
+        node.call("generate", 1)
         wait_for_wallet(rpc)
         info(f'{amount:>5} ZEC  "{memo}"')
 

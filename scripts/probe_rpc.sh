@@ -25,13 +25,18 @@ if [[ "${1:-}" == "--direct" ]]; then
   echo "Talking directly to Zallet at $URL (bypassing the rpc-router)"
   # Zallet writes a cookie credential on startup; use it rather than guessing
   # at the configured password.
-  COOKIE=$(docker exec z3-regtest-zallet-1 cat /var/lib/zallet/.cookie 2>/dev/null || true)
-  if [[ -n "$COOKIE" ]]; then
+  # The Zallet image is distroless - no shell, no cat - so read the cookie out
+  # of its volume with a mounted helper container instead of docker exec.
+  COOKIE=$(docker run --rm -v z3-regtest-zallet:/data busybox cat /data/.cookie 2>/dev/null | tr -d '
+' || true)
+  if [[ -n "$COOKIE" && "$COOKIE" == *:* ]]; then
     AUTH=(--user "$COOKIE")
-    echo "Using the RPC cookie from the container"
+    echo "Using the RPC cookie read from the z3-regtest-zallet volume"
   else
-    AUTH=(--user "zallet:zebra")
-    echo "No cookie found; trying zallet:zebra"
+    echo "ERROR: could not read the RPC cookie. Without it Zallet returns 401" >&2
+    echo "with an empty body, which is easy to mistake for a crash. Try:" >&2
+    echo "  docker run --rm -v z3-regtest-zallet:/data busybox cat /data/.cookie" >&2
+    exit 1
   fi
   echo
 fi
@@ -59,7 +64,7 @@ for m in "${METHODS[@]}"; do
     -d "{\"jsonrpc\":\"2.0\",\"method\":\"$m\",\"params\":[],\"id\":1}" "$URL" 2>&1)
 
   if [[ -z "$body" ]]; then
-    verdict="NO RESPONSE"
+    verdict="EMPTY BODY  <- usually 401: check credentials, not the method"
   elif [[ "$body" == *"Bad Gateway"* ]]; then
     verdict="502 BAD GATEWAY  <- broken on this build"
   elif [[ "$body" == *'"result"'* ]]; then
