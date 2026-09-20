@@ -8,9 +8,33 @@
 #
 #   bash scripts/probe_rpc.sh
 #   bash scripts/probe_rpc.sh http://127.0.0.1:8181
+#   bash scripts/probe_rpc.sh --direct     talk to Zallet, bypassing the router
+#
+# --direct matters: the rpc-router is built from z3's source, which pins an
+# older Zallet. It routes by method name, so a method missing from its table
+# returns "method not found" without Zallet ever being asked. That is
+# indistinguishable from Zallet genuinely lacking the method - unless you ask
+# Zallet yourself.
 set -uo pipefail
 
 URL="${1:-http://127.0.0.1:8181}"
+AUTH=()
+
+if [[ "${1:-}" == "--direct" ]]; then
+  URL="http://127.0.0.1:50232"
+  echo "Talking directly to Zallet at $URL (bypassing the rpc-router)"
+  # Zallet writes a cookie credential on startup; use it rather than guessing
+  # at the configured password.
+  COOKIE=$(docker exec z3-regtest-zallet-1 cat /var/lib/zallet/.cookie 2>/dev/null || true)
+  if [[ -n "$COOKIE" ]]; then
+    AUTH=(--user "$COOKIE")
+    echo "Using the RPC cookie from the container"
+  else
+    AUTH=(--user "zallet:zebra")
+    echo "No cookie found; trying zallet:zebra"
+  fi
+  echo
+fi
 
 # Methods Clearview needs, plus a few for comparison.
 METHODS=(
