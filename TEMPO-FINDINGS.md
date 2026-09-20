@@ -160,9 +160,45 @@ decimals), and `Actions.token.approveSync` against the Zone A portal
 `Actions.zone.depositSync` still reverts with "Execution reverted for an unknown reason", with and
 without an explicit `portalAddress`.
 
-Likely cause, from Tempo's own description of zones: *"When first depositing to the zone, the
-recipient and memo are encrypted, so only the sender and amount are visible on Mainnet."* So the
-first deposit probably has to go through `Actions.zone.encryptedDeposit*`, using
-`Actions.zone.getEncryptionKey` — a plain deposit cannot express an encrypted recipient.
+### What has been ruled out
 
-Untested at the time of writing; it is the next thing to try.
+The encrypted path was the obvious candidate, and it is not the answer either. Everything
+*around* the deposit works:
+
+| Checked | Result |
+|---|---|
+| Portal contracts deployed | Yes — 10,318 bytes at both Zone A and Zone B portals |
+| `getPortalAddress(chainId, zoneId)` | Works — **positional args**, not an object |
+| `Actions.zone.getEncryptionKey(client, { zoneId })` | Works — `{ keyIndex: 0n, publicKey: { prefix: 3, x: '0x1151…' } }` |
+| `Actions.token.approveSync` against the portal | Succeeds |
+| `internal.encryptDepositPayload(...)` | Produces a payload — **positional args**: `(publicKey, recipient, sender, portalAddress, keyIndex, memo)` |
+| `Actions.zone.depositSync` | **reverts** |
+| `Actions.zone.encryptedDepositSync` | **reverts** |
+
+And the revert is not specific to anything obvious — tried across **zone 6 and zone 7**, and
+across **pathUSD and AlphaUSD**, all four revert with "Execution reverted for an unknown reason".
+
+One gotcha worth recording separately: passing an explicit `portalAddress` to `getEncryptionKey`
+makes it fail with an ABI dump. Omit it and let the registry resolve, and it works.
+
+### Also ruled out: the chain ID
+
+Tempo's docs give Zone A's chain ID as `4217000006`; `zoneModerato(6).id` returns `421700006` —
+a digit shorter. Since the auth token embeds `chainId` for replay protection, a mismatch was a
+plausible cause of the 403. It is not: tokens minted with `421700006`, `4217000006` **and** the
+parent `42431` all return 403 identically.
+
+### Where that leaves it
+
+The 403 is account presence, and the deposit is the way to get it. What is not yet known is why a
+deposit assembled from the library's own helpers reverts. The likely remaining causes, in order:
+
+1. An argument the helpers expect to be derived differently (the revert carries no reason string,
+   so this is guesswork without a trace).
+2. Deposits gated on something not visible from the RPC — an allowlist, or a zone not open to
+   arbitrary depositors on testnet.
+
+**The cheapest way to settle it is to observe a working deposit.** Tempo's interactive guides
+perform zone deposits from a browser wallet; one successful deposit on the explorer gives the
+exact calldata to compare against. That is a five-minute answer versus an open-ended debugging
+session, and it is the next thing to do.
