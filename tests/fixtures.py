@@ -46,8 +46,8 @@ class FakeZcashRPC:
 
     def call(self, method: str, *params: Any) -> Any:
         self.calls.append((method, params))
-        if method == "z_listreceivedbyaddress":
-            return list(self.received)
+        if method == "z_listtransactions":
+            return [{"txid": t} for t in self.transactions]
         if method == "z_viewtransaction":
             return self.transactions.get(params[0], {"txid": params[0], "spends": [], "outputs": []})
         if method == "z_getbalanceforaccount":
@@ -114,13 +114,17 @@ DEFAULT_RECEIVED: list[dict] = [
 ]
 
 DEFAULT_TRANSACTIONS: dict[str, dict] = {
-    "aa" * 32: {"txid": "aa" * 32, "spends": [], "outputs": [
+    "aa" * 32: {"txid": "aa" * 32, "confirmations": 40, "blockindex": 100,
+                "blocktime": 1_758_000_000, "spends": [], "outputs": [
         {"pool": "orchard", "action": 0, "address": ZADDR, "outgoing": False,
-         "walletInternal": False, "value": 2.5, "valueZat": 250_000_000, **_memo("Donation - Q3 appeal")},
+         "walletInternal": False, "value": 2.5, "valueZat": 250_000_000,
+         "account_uuid": ACCOUNT_UUID, **_memo("Donation - Q3 appeal")},
     ]},
-    "bb" * 32: {"txid": "bb" * 32, "spends": [], "outputs": [
+    "bb" * 32: {"txid": "bb" * 32, "confirmations": 30, "blockindex": 110,
+                "blocktime": 1_758_100_000, "spends": [], "outputs": [
         {"pool": "orchard", "action": 0, "address": ZADDR, "outgoing": False,
-         "walletInternal": False, "value": 1.0, "valueZat": 100_000_000, **_memo("Monthly giving")},
+         "walletInternal": False, "value": 1.0, "valueZat": 100_000_000,
+         "account_uuid": ACCOUNT_UUID, **_memo("Monthly giving")},
     ]},
     # The vendor payment: one outgoing output, one change output.
     # Zallet adds top-level status/confirmations/blockhash/blockindex/blocktime/
@@ -156,9 +160,11 @@ DEFAULT_TRANSACTIONS: dict[str, dict] = {
              "value": 0.01, "valueZat": 1_000_000},
         ],
     },
-    "dd" * 32: {"txid": "dd" * 32, "spends": [], "outputs": [
+    "dd" * 32: {"txid": "dd" * 32, "confirmations": 5, "blockindex": 130,
+                "blocktime": 1_758_300_000, "spends": [], "outputs": [
         {"pool": "sapling", "output": 0, "address": ZADDR, "outgoing": False,
-         "walletInternal": False, "value": 0.25, "valueZat": 25_000_000, **_memo("Anonymous gift")},
+         "walletInternal": False, "value": 0.25, "valueZat": 25_000_000,
+         "account_uuid": ACCOUNT_UUID, **_memo("Anonymous gift")},
     ]},
 }
 

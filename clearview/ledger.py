@@ -3,17 +3,30 @@
 This is the whole product thesis in one module: given a viewing key and no
 spending authority, produce complete, auditable books.
 
-Two zcashd RPCs do the work:
+Three Zallet RPCs do the work:
 
-* ``z_listreceivedbyaddress`` - every note received by a shielded address, with
-  amount, memo, height and a ``change`` flag.
-* ``z_viewtransaction`` - per-transaction shielded detail, whose ``outputs[]``
-  carry ``outgoing`` (the output is *not* for a wallet address, i.e. a payment
-  out) and ``walletInternal`` (change). Those two flags are the classification
-  bookkeeping needs.
+* ``z_importviewingkey`` - give the wallet view-only authority over an account.
+* ``z_listtransactions`` - account-scoped transaction listing. This replaces
+  zcashd's ``z_listreceivedbyaddress``, which Zallet does not implement.
+* ``z_viewtransaction`` - per-transaction detail. Its ``outputs[]`` carry the
+  flags that make classification possible.
 
-Receipts come from the first; payments and change come from the second. Taking
-receipts from only one source is what keeps them from being double counted.
+Classification follows Zallet's own semantics:
+
+===========================  ==========================================
+``outgoing = true``          the output left the wallet -> PAYMENT
+``walletInternal = true``    change returning to the account -> CHANGE
+an ``account_uuid`` we own   money arrived -> RECEIPT
+none of the above            not ours; ignore
+===========================  ==========================================
+
+That last row matters. Zallet includes transparent inputs and outputs, and
+**omits** ``outgoing`` for outputs that are neither ours nor in a transaction
+we funded. Treating a missing flag as a receipt would silently invent income,
+so membership is decided by ``account_uuid`` rather than by absence.
+
+Because transactions are enumerated once and detailed once, an entry cannot be
+counted twice - which the previous two-source design had to guard against.
 """
 
 from __future__ import annotations
@@ -34,66 +47,77 @@ def _memo_of(item: dict) -> str | None:
     return None
 
 
-def receipts_for_address(rpc: ZcashRPC, address: str, minconf: int = 1) -> list[LedgerEntry]:
-    """Every note received at `address`, as ledger entries.
+def _amount_zat(item: dict) -> int:
+    """Zallet reports valueZat; some payloads only carry a decimal `value`."""
+    if "valueZat" in item:
+        return int(item["valueZat"])
+    if "amountZat" in item:
+        return int(item["amountZat"])
+    return int(round(float(item.get("value", item.get("amount", 0))) * 100_000_000))
 
-    Outputs flagged ``change`` are recorded as CHANGE so they do not inflate
-    revenue, but are kept so the books reconcile against on-chain reality.
+
+def _classify(output: dict, owned: set[str]) -> Direction | None:
+    """Decide what an output means for the account, or None if it is not ours."""
+    if output.get("outgoing"):
+        return Direction.PAYMENT
+    if output.get("walletInternal"):
+        return Direction.CHANGE
+    # Ours only if Zallet attributes it to an account we hold a key for. An
+    # absent `outgoing` flag is not evidence of a receipt.
+    account = output.get("account_uuid")
+    if account is not None and (not owned or account in owned):
+        return Direction.RECEIPT
+    if account is None and not owned:
+        # No account attribution available at all (older builds): fall back to
+        # treating an addressed, non-outgoing output as a receipt.
+        return Direction.RECEIPT if output.get("address") else None
+    return None
+
+
+def list_transaction_ids(rpc: ZcashRPC, account: str | None = None) -> list[str]:
+    """Every transaction the wallet knows about for `account`.
+
+    ``z_listtransactions`` is marked experimental upstream, so the txid is read
+    defensively: entries may be plain strings or objects.
     """
-    entries = []
-    for note in rpc.call("z_listreceivedbyaddress", address, minconf):
-        is_change = bool(note.get("change"))
-        entries.append(
-            LedgerEntry(
-                txid=note["txid"],
-                direction=Direction.CHANGE if is_change else Direction.RECEIPT,
-                pool=note.get("pool", "unknown"),
-                amount_zat=int(note["amountZat"]),
-                address=address,
-                memo=_memo_of(note),
-                block_height=note.get("blockheight"),
-                block_time=note.get("blocktime"),
-                confirmations=note.get("confirmations"),
-                output_index=note.get("outindex", note.get("jsoutindex")),
-            )
-        )
-    return entries
+    entries = rpc.call("z_listtransactions", account) if account else rpc.call("z_listtransactions")
+    txids = []
+    for entry in entries or []:
+        if isinstance(entry, str):
+            txids.append(entry)
+        elif isinstance(entry, dict):
+            txid = entry.get("txid") or entry.get("transaction_id")
+            if txid:
+                txids.append(txid)
+    # Preserve first-seen order while removing duplicates.
+    return list(dict.fromkeys(txids))
 
 
-def payments_in_transaction(rpc: ZcashRPC, txid: str) -> list[LedgerEntry]:
-    """Outbound payments in `txid`, from its shielded outputs.
-
-    An output with ``outgoing = true`` went to an address outside the wallet,
-    which is a payment. ``walletInternal`` marks change and is handled by
-    `receipts_for_address`, so it is skipped here to avoid double counting.
-
-    Zallet notes (altered semantics vs zcashd):
-
-    * ``outgoing`` is now **omitted** for outputs that are neither for the wallet
-      nor in a wallet-funded transaction. Treating a missing flag as false is
-      therefore correct - such an output is not our payment.
-    * Transparent inputs and outputs are included, so ``pool`` may be
-      ``"transparent"``; those carry no ``memo``.
-    * Block metadata (``blocktime``, ``blockindex``, ``confirmations``) is now
-      returned here, so it no longer has to be joined from the receipt.
-    """
+def entries_in_transaction(
+    rpc: ZcashRPC, txid: str, owned: set[str] | None = None
+) -> list[LedgerEntry]:
+    """Every ledger entry contained in one transaction."""
     detail = rpc.call("z_viewtransaction", txid)
+    owned = owned or set()
     entries = []
-    for output in detail.get("outputs", []):
-        if not output.get("outgoing"):
+
+    for index, output in enumerate(detail.get("outputs", [])):
+        direction = _classify(output, owned)
+        if direction is None:
             continue
         entries.append(
             LedgerEntry(
                 txid=detail.get("txid", txid),
-                direction=Direction.PAYMENT,
+                direction=direction,
                 pool=output.get("pool", "unknown"),
-                amount_zat=int(output["valueZat"]),
+                amount_zat=_amount_zat(output),
                 address=output.get("address"),
                 memo=_memo_of(output),
+                # Zallet returns block metadata on z_viewtransaction itself.
                 block_height=detail.get("blockindex"),
                 block_time=detail.get("blocktime"),
                 confirmations=detail.get("confirmations"),
-                output_index=output.get("output", output.get("action")),
+                output_index=output.get("output", output.get("action", index)),
             )
         )
     return entries
@@ -102,47 +126,18 @@ def payments_in_transaction(rpc: ZcashRPC, txid: str) -> list[LedgerEntry]:
 def build_ledger(
     rpc: ZcashRPC,
     viewing_key: str,
-    addresses: list[str],
-    minconf: int = 1,
+    account: str | None = None,
+    owned_accounts: set[str] | None = None,
 ) -> Ledger:
-    """Build a full ledger for `addresses`, which the viewing key can observe.
+    """Build a full ledger for `account`, which the viewing key can observe.
 
-    The viewing key must already be imported (``z_importviewingkey``) so zcashd
-    can decrypt the relevant notes. No spending key is ever required or used.
+    The viewing key must already be imported (``z_importviewingkey``) so the
+    wallet can decrypt the relevant notes. No spending key is ever required.
     """
+    owned = owned_accounts or ({account} if account else set())
     ledger = Ledger(viewing_key=viewing_key)
-
-    for address in addresses:
-        ledger.entries.extend(receipts_for_address(rpc, address, minconf))
-
-    # Only transactions we can already see are worth asking about; payments are
-    # discovered by re-examining those same transactions for outgoing outputs.
-    seen_txids = {entry.txid for entry in ledger.entries}
-    known_heights = {
-        entry.txid: (entry.block_height, entry.block_time, entry.confirmations)
-        for entry in ledger.entries
-    }
-
-    for txid in sorted(seen_txids):
-        for payment in payments_in_transaction(rpc, txid):
-            # Zallet returns block metadata on z_viewtransaction; zcashd did not.
-            # Only fill the gaps, so a real value is never overwritten.
-            height, time, confs = known_heights.get(txid, (None, None, None))
-            ledger.entries.append(
-                LedgerEntry(
-                    txid=payment.txid,
-                    direction=payment.direction,
-                    pool=payment.pool,
-                    amount_zat=payment.amount_zat,
-                    address=payment.address,
-                    memo=payment.memo,
-                    block_height=payment.block_height if payment.block_height is not None else height,
-                    block_time=payment.block_time if payment.block_time is not None else time,
-                    confirmations=payment.confirmations if payment.confirmations is not None else confs,
-                    output_index=payment.output_index,
-                )
-            )
-
+    for txid in list_transaction_ids(rpc, account):
+        ledger.entries.extend(entries_in_transaction(rpc, txid, owned))
     return ledger
 
 

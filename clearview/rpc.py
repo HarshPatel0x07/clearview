@@ -99,6 +99,27 @@ class ZcashClient:
             raise RPCError(err_obj.get("code", -1), err_obj.get("message", "unknown"))
         return body.get("result")
 
+    @classmethod
+    def from_cookie(cls, cookie: str, port: int = 50232, host: str = "127.0.0.1",
+                    **kwargs: Any) -> "ZcashClient":
+        """Build a client from Zallet's generated RPC cookie.
+
+        Zallet writes `__cookie__:<secret>` to `{datadir}/.cookie` on startup.
+        Under Z3 that file lives in a Docker volume and the image is
+        distroless - no shell - so read it with a mounted helper container:
+
+            docker run --rm -v z3-regtest-zallet:/data busybox cat /data/.cookie
+
+        Prefer talking to Zallet directly over going through the Z3
+        rpc-router: the router is built against an older Zallet and returns
+        "method not found" for methods missing from its own table, even when
+        the wallet implements them. Observed 2026-09-20 -
+        `z_importviewingkey` and `z_exportviewingkey` both work when asked
+        directly and both appear absent through the router.
+        """
+        user, _, password = cookie.strip().partition(":")
+        return cls(user, password, host=host, port=port, **kwargs)
+
     # ---- convenience wrappers, named after the RPC methods they call ----
 
     def getblockchaininfo(self) -> dict:
@@ -113,8 +134,14 @@ class ZcashClient:
     def z_getbalanceforviewingkey(self, fvk: str, minconf: int = 1) -> dict:
         return self.call("z_getbalanceforviewingkey", fvk, minconf)
 
-    def z_listreceivedbyaddress(self, address: str, minconf: int = 1) -> list[dict]:
-        return self.call("z_listreceivedbyaddress", address, minconf)
+    def z_listtransactions(self, account: str | None = None) -> list:
+        """Account-scoped transaction listing.
+
+        Zallet's replacement for zcashd's `z_listreceivedbyaddress`, which it
+        does not implement. Marked experimental upstream.
+        """
+        return self.call("z_listtransactions", account) if account \
+            else self.call("z_listtransactions")
 
     def z_viewtransaction(self, txid: str) -> dict:
         return self.call("z_viewtransaction", txid)

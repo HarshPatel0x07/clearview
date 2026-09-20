@@ -85,7 +85,11 @@ def main() -> int:
     p.add_argument("--rpc-port", type=int)
     p.add_argument("--network", default="regtest", choices=["mainnet", "testnet", "regtest"])
     p.add_argument("--viewing-key", help="import this viewing key before reading")
-    p.add_argument("--address", action="append", default=[], help="shielded address (repeatable)")
+    p.add_argument("--address", action="append", default=[],
+                   help="shielded address (informational; enumeration is account-scoped)")
+    p.add_argument("--cookie",
+                   help="Zallet RPC cookie '__cookie__:secret'. Read it with: "
+                        "docker run --rm -v z3-regtest-zallet:/data busybox cat /data/.cookie")
     p.add_argument("--account", help="account UUID for reconciliation (Zallet). Defaults to the viewing key")
     p.add_argument("--minconf", type=int, default=1)
     p.add_argument("--rescan-height", type=int, default=0)
@@ -97,14 +101,21 @@ def main() -> int:
 
         from tests.fixtures import ACCOUNT_UUID
 
-        rpc, key, addresses = FakeZcashRPC(), UFVK, [ZADDR]
+        rpc, key = FakeZcashRPC(), UFVK
         args.account = args.account or ACCOUNT_UUID
         print("[mock mode - canned data, no node contacted]\n")
     else:
-        if not args.address:
-            p.error("at least one --address is required")
-        rpc = ZcashClient(args.rpc_user, args.rpc_password, args.rpc_host,
-                          args.rpc_port, args.network, url=args.rpc_url)
+        if not (args.cookie or args.rpc_url or args.rpc_user):
+            p.error("supply --cookie (preferred), or --rpc-url / --rpc-user")
+        if not args.account:
+            p.error("--account <uuid> is required; enumeration is account-scoped")
+        if args.cookie:
+            # Talk to Zallet directly: the Z3 rpc-router reports methods as
+            # missing when they are absent from its own older table.
+            rpc = ZcashClient.from_cookie(args.cookie)
+        else:
+            rpc = ZcashClient(args.rpc_user, args.rpc_password, args.rpc_host,
+                              args.rpc_port, args.network, url=args.rpc_url)
         key, addresses = args.viewing_key or "(not supplied)", args.address
 
         try:
@@ -123,8 +134,8 @@ def main() -> int:
                 print(f"note: import returned '{err.message}' - continuing\n")
 
     try:
-        ledger = build_ledger(rpc, key, addresses, args.minconf)
-        recon = reconcile(rpc, ledger, args.account or key, args.minconf)
+        ledger = build_ledger(rpc, key, args.account)
+        recon = reconcile(rpc, ledger, args.account, args.minconf)
     except (RPCError, RuntimeError) as err:
         print(f"Failed while reading the chain: {err}", file=sys.stderr)
         return 1

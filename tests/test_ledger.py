@@ -19,7 +19,7 @@ from tests.fixtures import ACCOUNT_UUID, UFVK, ZADDR, FakeZcashRPC  # noqa: E402
 class TestLedgerReconstruction(unittest.TestCase):
     def setUp(self) -> None:
         self.rpc = FakeZcashRPC()
-        self.ledger = build_ledger(self.rpc, UFVK, [ZADDR])
+        self.ledger = build_ledger(self.rpc, UFVK, ACCOUNT_UUID)
 
     def test_finds_every_receipt(self) -> None:
         receipts = [e for e in self.ledger.entries if e.direction is Direction.RECEIPT]
@@ -95,7 +95,7 @@ class TestLedgerReconstruction(unittest.TestCase):
 class TestReconciliation(unittest.TestCase):
     def test_reconciles_against_node_balance(self) -> None:
         rpc = FakeZcashRPC()
-        ledger = build_ledger(rpc, UFVK, [ZADDR])
+        ledger = build_ledger(rpc, UFVK, ACCOUNT_UUID)
         result = reconcile(rpc, ledger, ACCOUNT_UUID)
         self.assertTrue(result["reconciled"], result)
         self.assertEqual(result["difference_zat"], 0)
@@ -104,7 +104,7 @@ class TestReconciliation(unittest.TestCase):
     def test_detects_drift(self) -> None:
         """A tool auditors rely on must notice when its books disagree with the chain."""
         rpc = FakeZcashRPC(balance={"pools": {"orchard": {"valueZat": 999}}})
-        ledger = build_ledger(rpc, UFVK, [ZADDR])
+        ledger = build_ledger(rpc, UFVK, ACCOUNT_UUID)
         result = reconcile(rpc, ledger, ACCOUNT_UUID)
         self.assertFalse(result["reconciled"])
         self.assertEqual(result["difference_zat"], 300_000_000 - 999)
@@ -112,21 +112,38 @@ class TestReconciliation(unittest.TestCase):
 
 class TestEdgeCases(unittest.TestCase):
     def test_empty_account(self) -> None:
-        rpc = FakeZcashRPC(received=[], transactions={}, balance={"pools": {}})
-        ledger = build_ledger(rpc, UFVK, [ZADDR])
+        rpc = FakeZcashRPC(transactions={}, balance={"pools": {}})
+        ledger = build_ledger(rpc, UFVK, ACCOUNT_UUID)
         self.assertEqual(ledger.entries, [])
         self.assertEqual(ledger.balance_zat, 0)
         self.assertTrue(reconcile(rpc, ledger, ACCOUNT_UUID)["reconciled"])
 
     def test_unconfirmed_entries_sort_last(self) -> None:
-        rpc = FakeZcashRPC(received=[
-            {"pool": "orchard", "txid": "ee" * 32, "amountZat": 1, "memo": "",
-             "blockheight": None, "outindex": 0, "change": False},
-            {"pool": "orchard", "txid": "ff" * 32, "amountZat": 2, "memo": "",
-             "blockheight": 5, "outindex": 0, "change": False},
-        ], transactions={}, balance={"pools": {}})
-        ledger = build_ledger(rpc, UFVK, [ZADDR])
+        """A transaction still in the mempool has no height and must sort last."""
+        rpc = FakeZcashRPC(transactions={
+            "ee" * 32: {"txid": "ee" * 32, "outputs": [
+                {"pool": "orchard", "action": 0, "address": ZADDR, "valueZat": 1,
+                 "account_uuid": ACCOUNT_UUID}]},
+            "ff" * 32: {"txid": "ff" * 32, "blockindex": 5, "outputs": [
+                {"pool": "orchard", "action": 0, "address": ZADDR, "valueZat": 2,
+                 "account_uuid": ACCOUNT_UUID}]},
+        }, balance={"pools": {}})
+        ledger = build_ledger(rpc, UFVK, ACCOUNT_UUID)
+        self.assertEqual(len(ledger.entries), 2)
         self.assertEqual(ledger.sorted_entries()[-1].txid, "ee" * 32)
+
+    def test_output_belonging_to_another_account_is_ignored(self) -> None:
+        """Zallet returns outputs we can see but do not own; they are not income."""
+        rpc = FakeZcashRPC(transactions={
+            "ab" * 32: {"txid": "ab" * 32, "blockindex": 7, "outputs": [
+                {"pool": "orchard", "action": 0, "address": ZADDR, "valueZat": 500,
+                 "account_uuid": ACCOUNT_UUID},
+                {"pool": "orchard", "action": 1, "address": "zsomeoneelse",
+                 "valueZat": 999, "account_uuid": "not-our-account"},
+            ]},
+        }, balance={"pools": {}})
+        ledger = build_ledger(rpc, UFVK, ACCOUNT_UUID)
+        self.assertEqual([e.amount_zat for e in ledger.entries], [500])
 
     def test_to_zec_formatting(self) -> None:
         self.assertEqual(to_zec(100_000_000), "1.00000000")
