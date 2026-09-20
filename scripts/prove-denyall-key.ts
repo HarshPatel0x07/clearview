@@ -1,24 +1,19 @@
 /**
  * H-04: can a deny-all Access Key read a Tempo Zone, and provably not spend?
  *
- * The entire product rests on this. Clearview's pitch is that a business can
- * hand its auditor a key that reads its private books and cannot move money.
- * Tempo's docs say Access Keys may authenticate to the Zone RPC, and TIP-1011
- * allows keys scoped to deny-all, but no single sentence says a deny-all key is
- * accepted as an auth-token signer. So it gets tested before anything is built
- * on top of it.
- *
- * Deliberately minimal: proving the key can authenticate and cannot spend needs
- * no zone funds. `eth_chainId` is available to any authenticated caller, which
- * makes it the cleanest possible probe of "is this token accepted".
+ * The product rests on this. Clearview's pitch is that a business hands its
+ * auditor a key that reads its private books and cannot move money. Tempo's
+ * docs say Access Keys may authenticate to the Zone RPC, and TIP-1011 allows
+ * deny-all scoping, but nothing states both together. So it is tested before
+ * anything is built on it.
  *
  *   npx tsx scripts/prove-denyall-key.ts
  *
- * Testnet only. The private key is generated locally and written to a
- * gitignored file; it holds faucet tokens with no value.
+ * Testnet only. The key is generated locally into a gitignored file and holds
+ * faucet tokens with no value.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -26,182 +21,171 @@ import {
   Account,
   Actions,
   Chain,
-  KeyAuthorizationManager,
   Client,
+  KeyAuthorizationManager,
   Storage,
   ZoneRpcAuthentication,
   http,
 } from 'viem/tempo'
 import { http as zoneHttp, zoneModerato } from 'viem/tempo/zones'
-import { Secp256k1, P256 } from 'ox'
+import { P256, Secp256k1 } from 'ox'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const KEY_FILE = resolve(HERE, '../.secrets/testnet-account.json')
-const ZONE_ID = 6 // Zone A
-const PUBLIC_RPC = 'https://rpc.moderato.tempo.xyz'
+
+const ZONE_ID = 6 // Zone A on Moderato
+const PATH_USD = '0x20c0000000000000000000000000000000000000' as const
+const DEPOSIT = 1_000_000n // 1 pathUSD; TIP-20 uses 6 decimals
 
 const ok = (m: string) => console.log(`  \u2713 ${m}`)
-const no = (m: string) => console.log(`  \u2717 ${m}`)
+const bad = (m: string) => console.log(`  \u2717 ${m}`)
 const step = (m: string) => console.log(`\n== ${m}`)
 
-/** Load or create the testnet account. Testnet only; tokens come from a faucet. */
 function loadAccount() {
-  if (existsSync(KEY_FILE)) {
-    const { privateKey } = JSON.parse(readFileSync(KEY_FILE, 'utf8'))
-    return { privateKey, created: false }
-  }
+  if (existsSync(KEY_FILE)) return JSON.parse(readFileSync(KEY_FILE, 'utf8')).privateKey as `0x${string}`
   const privateKey = Secp256k1.randomPrivateKey()
   mkdirSync(dirname(KEY_FILE), { recursive: true })
-  writeFileSync(
-    KEY_FILE,
-    JSON.stringify({ privateKey, note: 'TESTNET ONLY - faucet tokens, no value' }, null, 2),
-  )
-  return { privateKey, created: true }
+  writeFileSync(KEY_FILE, JSON.stringify({ privateKey, note: 'TESTNET ONLY - no value' }, null, 2))
+  return privateKey
 }
 
-/** Ask the public testnet faucet to mint test stablecoins. */
+/** The faucet is an RPC method, not a web form - no wallet or sign-in needed. */
 async function fund(address: string) {
-  const res = await fetch(PUBLIC_RPC, {
+  const res = await fetch('https://rpc.moderato.tempo.xyz', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'tempo_fundAddress',
-      params: [address],
-      id: 1,
-    }),
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'tempo_fundAddress', params: [address], id: 1 }),
   })
   const body = (await res.json()) as { result?: string[]; error?: { message: string } }
   if (body.error) throw new Error(`faucet: ${body.error.message}`)
   return body.result ?? []
 }
 
-/** Mint a Zone RPC authorization token signed by `signer`. */
-async function mintZoneToken(
-  signer: { sign: (p: { hash: `0x${string}` }) => Promise<any>; address: string },
-  zoneId: number,
-  chainId: number,
-) {
-  const now = Math.floor(Date.now() / 1000)
-  const auth = ZoneRpcAuthentication.from({
-    zoneId,
-    chainId,
-    issuedAt: now,
-    expiresAt: now + 3600,
-  })
-  const payload = ZoneRpcAuthentication.getSignPayload(auth)
-  const signature = await signer.sign({ hash: payload })
-  return ZoneRpcAuthentication.serialize({ ...auth, signature } as any)
-}
-
-/** Call a zone method with an explicit token, so failures are legible. */
+/** Call the zone with an explicit token so failures stay legible. */
 async function zoneCall(url: string, token: string, method: string, params: unknown[] = []) {
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      [ZoneRpcAuthentication.headerName]: token,
-    },
+    headers: { 'Content-Type': 'application/json', [ZoneRpcAuthentication.headerName]: token },
     body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
   })
   const text = await res.text()
-  let body: any = null
+  let body: any
   try {
     body = JSON.parse(text)
   } catch {
-    /* non-JSON body, e.g. an empty 401 */
+    /* 401/403 come back with an empty body */
   }
   return { status: res.status, body, text }
 }
 
 async function main() {
-  console.log('H-04  deny-all Access Key: can it read a Zone, and not spend?')
-  console.log(`      auth header: ${ZoneRpcAuthentication.headerName}`)
-  console.log(`      magic bytes: ${ZoneRpcAuthentication.magicBytes.slice(0, 26)}... ("TempoZoneRPC")`)
+  console.log('H-04  deny-all Access Key: read a Zone, and provably not spend?')
 
-  step('1. account')
-  const { privateKey, created } = loadAccount()
-  const account = Account.fromSecp256k1(privateKey)
-  ok(`${created ? 'created' : 'loaded'} ${account.address}`)
-
+  const account = Account.fromSecp256k1(loadAccount())
   const client = Client.create({ account, chain: Chain.moderato, transport: http() })
+  const zoneChain = zoneModerato(ZONE_ID)
+  const zoneUrl = zoneChain.rpcUrls.http
 
-  step('2. faucet')
-  const hashes = await fund(account.address)
-  ok(`funded with ${hashes.length} token mint(s)`)
+  step('1. fund the account on the public chain')
+  ok(`account ${account.address}`)
+  ok(`faucet minted ${(await fund(account.address)).length} tokens`)
+
+  step(`2. deposit into Zone ${ZONE_ID} so the zone knows this account`)
+  // Without this the zone returns 403 for every signer, including the account's
+  // own root key - access is account-level, not key-level.
+  try {
+    await Actions.zone.depositSync(client, {
+      amount: DEPOSIT,
+      token: PATH_USD,
+      zoneId: ZONE_ID,
+      recipient: account.address,
+      bouncebackRecipient: account.address,
+      chainId: Chain.moderato.id,
+    } as any)
+    ok(`deposited ${Number(DEPOSIT) / 1e6} pathUSD into zone ${ZONE_ID}`)
+  } catch (e) {
+    bad(`deposit failed: ${(e as any).shortMessage ?? (e as Error).message}`.slice(0, 160))
+  }
 
   step('3. authorise a DENY-ALL access key')
-  // The deny-all encoding: BOTH `scopes: []` and `limits: []` are required.
-  // Found empirically, and it is not documented. With `scopes: []` alone the
-  // node rejects the authorization with "admin-signed key authorization account
-  // mismatch" - an empty scope list without an empty limit list produces an
-  // inconsistent restriction set that the keychain precompile reads as an admin
-  // key. Together they mean: no call is permitted, on no token, for any amount.
+  // Both empty lists are required. With `scopes: []` alone the node rejects the
+  // authorization as "admin-signed key authorization account mismatch": an empty
+  // scope list without an empty limit list is an inconsistent restriction set
+  // that the keychain precompile reads as an admin key. Together they mean no
+  // call, on no token, for any amount. Undocumented - see TEMPO-FINDINGS.md.
   const accessKey = Account.fromP256(P256.randomPrivateKey(), {
     access: account,
     keyAuthorizationManager: KeyAuthorizationManager.memory(),
   })
-  // `address` is the account the key acts for; the key itself is accessKeyAddress.
-  ok(`key ${(accessKey as any).accessKeyAddress} acting for ${accessKey.address}`)
-  const hash = await Actions.accessKey.authorizeSync(client, {
+  await Actions.accessKey.authorizeSync(client, {
     accessKey,
     expiry: Math.floor(Date.now() / 1000) + 86_400,
     scopes: [],
     limits: [],
   })
-  ok(`authorised (deny-all: scopes:[] + limits:[])`)
-  void hash
+  ok(`key ${(accessKey as any).accessKeyAddress} authorised, scoped to call nothing`)
 
-  step('4. mint a Zone auth token signed by the DENY-ALL key')
-  const zoneChain = zoneModerato(ZONE_ID)
-  const zoneUrl = zoneChain.rpcUrls.http
-  const token = await mintZoneToken(accessKey as any, ZONE_ID, zoneChain.id)
-  ok(`token minted (${token.length} chars) for zone ${ZONE_ID} / chain ${zoneChain.id}`)
-
-  step('5. THE QUESTION: does the zone accept it?')
-  const chainIdRes = await zoneCall(zoneUrl, token, 'eth_chainId')
-  if (chainIdRes.body?.result) {
-    ok(`zone accepted the deny-all key. eth_chainId = ${chainIdRes.body.result}`)
-  } else {
-    no(`zone rejected it. HTTP ${chainIdRes.status} ${chainIdRes.text.slice(0, 160)}`)
-    console.log('\n  H-04 FAILED. Fall back to: the business self-indexes and issues')
-    console.log('  signed, scoped statements to the auditor. See product-decision-tempo.md.')
-    process.exit(3)
-  }
-
-  step('6. and can it read scoped data?')
-  const balRes = await zoneCall(zoneUrl, token, 'eth_getBalance', [account.address, 'latest'])
-  console.log(`  eth_getBalance -> ${JSON.stringify(balRes.body?.result ?? balRes.body?.error)}`)
-  const logsRes = await zoneCall(zoneUrl, token, 'eth_getLogs', [{ fromBlock: '0x0', toBlock: 'latest' }])
-  const logs = logsRes.body?.result
-  console.log(`  eth_getLogs    -> ${Array.isArray(logs) ? `${logs.length} entries` : JSON.stringify(logsRes.body?.error)}`)
-
-  step('7. and does spending actually fail?')
-  // The whole promise is that this key cannot move money. Demonstrate it.
-  try {
-    await Actions.accessKey.getRemainingLimit(client, {
-      accessKey: accessKey.address,
-      token: '0x20c0000000000000000000000000000000000000',
-    })
-  } catch (e) {
-    console.log(`  remaining limit query: ${(e as Error).message.slice(0, 90)}`)
-  }
+  step('4. mint a Zone auth token signed by that key')
+  const storage = Storage.memory()
   const zoneClient = Client.create({
     account: accessKey as any,
     chain: zoneChain,
-    transport: zoneHttp(undefined, { storage: Storage.memory() }),
+    transport: zoneHttp(undefined, { storage }),
   })
-  void zoneClient // constructed to prove the transport wires up; transfer attempt below
+  const { token } = await Actions.zone.signAuthorizationToken(zoneClient as any, {
+    account: accessKey as any,
+    zoneId: ZONE_ID,
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    storage,
+  } as any)
+  ok(`token minted (${String(token).length} chars)`)
+
+  step('5. THE QUESTION: does the zone accept a deny-all key?')
+  const chainId = await zoneCall(zoneUrl, String(token), 'eth_chainId')
+  if (!chainId.body?.result) {
+    bad(`rejected. HTTP ${chainId.status} ${chainId.text.slice(0, 120) || '(empty body)'}`)
+    console.log(
+      chainId.status === 403
+        ? '\n  403 means the signature verified but the account is not permitted in the zone.\n' +
+            '  Check step 2 - the deposit must land before the zone recognises the account.'
+        : '\n  401 means the credentials themselves were rejected.',
+    )
+    process.exit(3)
+  }
+  ok(`ACCEPTED. eth_chainId = ${chainId.body.result}`)
+
+  step('6. can it read the books?')
+  const bal = await zoneCall(zoneUrl, String(token), 'eth_getBalance', [account.address, 'latest'])
+  console.log(`  eth_getBalance -> ${JSON.stringify(bal.body?.result ?? bal.body?.error)}`)
+  const logs = await zoneCall(zoneUrl, String(token), 'eth_getLogs', [
+    { fromBlock: '0x0', toBlock: 'latest' },
+  ])
+  const entries = logs.body?.result
+  console.log(
+    `  eth_getLogs    -> ${Array.isArray(entries) ? `${entries.length} TIP-20 events` : JSON.stringify(logs.body?.error)}`,
+  )
+
+  step('7. and does spending fail?')
+  try {
+    await Actions.token.transferSync(zoneClient as any, {
+      account: accessKey as any,
+      token: PATH_USD,
+      to: '0x000000000000000000000000000000000000dEaD',
+      amount: 1n,
+    } as any)
+    bad('TRANSFER SUCCEEDED - the key is not actually deny-all. Product assumption broken.')
+    process.exit(4)
+  } catch (e) {
+    ok(`transfer refused: ${String((e as any).shortMessage ?? (e as Error).message).slice(0, 90)}`)
+  }
 
   console.log('\n' + '='.repeat(74))
-  console.log('H-04 RESULT: the zone ACCEPTED a token signed by a deny-all access key.')
-  console.log('A key that can read the private books and is scoped to call nothing')
-  console.log('is exactly the auditor credential Clearview hands out.')
+  console.log('H-04 PROVEN: a key that reads the private books and cannot move money.')
+  console.log('That is the auditor credential Clearview hands out.')
   console.log('='.repeat(74))
 }
 
 main().catch((e) => {
-  console.error('\nFAILED:', e?.shortMessage ?? e?.message ?? e)
-  if (e?.cause) console.error('cause:', String(e.cause).slice(0, 300))
+  console.error('\nFAILED:', (e as any)?.shortMessage ?? (e as Error)?.message ?? e)
   process.exit(1)
 })

@@ -135,3 +135,34 @@ retry — not more work on key scoping.
 
 **Read 401 as "credentials rejected" and 403 as "credentials fine, account not permitted".**
 Conflating them cost time here.
+
+## Use `Actions.zone.signAuthorizationToken`, not a hand-rolled token
+
+`ZoneRpcAuthentication` can be driven manually, but viem already does it and stores the result
+where the zone `http` transport expects to find it:
+
+```ts
+const storage = Storage.memory()
+const { token } = await Actions.zone.signAuthorizationToken(zoneClient, {
+  account: accessKey, zoneId: 6, expiresAt: now + 3600, storage,
+})
+```
+
+The transport reads the token from `Storage` and injects the header itself, so a client built with
+`zoneHttp(undefined, { storage })` needs no manual header plumbing.
+
+## Zone deposit: plain `deposit` reverts
+
+Confirmed working first: the faucet mints (balance read back as `2999999.747506` pathUSD at 6
+decimals), and `Actions.token.approveSync` against the Zone A portal
+`0x7069DeC4E64Fd07334A0933eDe836C17259c9B23` succeeds.
+
+`Actions.zone.depositSync` still reverts with "Execution reverted for an unknown reason", with and
+without an explicit `portalAddress`.
+
+Likely cause, from Tempo's own description of zones: *"When first depositing to the zone, the
+recipient and memo are encrypted, so only the sender and amount are visible on Mainnet."* So the
+first deposit probably has to go through `Actions.zone.encryptedDeposit*`, using
+`Actions.zone.getEncryptionKey` — a plain deposit cannot express an encrypted recipient.
+
+Untested at the time of writing; it is the next thing to try.
