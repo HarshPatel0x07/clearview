@@ -5,6 +5,7 @@ import {
   buildLedger,
   classify,
   decodeMemo,
+  encodeMemo,
   format,
   matchInvoices,
   reconcile,
@@ -18,9 +19,9 @@ const DONOR = '0x1111111111111111111111111111111111111111' as const
 const VENDOR = '0x2222222222222222222222222222222222222222' as const
 const PATH_USD = '0x20c0000000000000000000000000000000000000' as const
 
-/** Encode text as a 32-byte right-padded memo, as TIP-20 carries it. */
-const memo = (text: string) =>
-  `0x${Buffer.from(text, 'ascii').toString('hex').padEnd(64, '0')}` as `0x${string}`
+// The production encoder, so the fixtures exercise the shipped code path
+// rather than a Buffer-based lookalike that only works in Node.
+const memo = encodeMemo
 
 const log = (
   eventName: string,

@@ -92,6 +92,24 @@ export function decodeMemo(raw: string | null | undefined): string | null {
   return /^[\x20-\x7E]+$/.test(text) ? text.trim() : null
 }
 
+/**
+ * Encode text as a 32-byte right-padded memo, as TIP-20 carries it.
+ *
+ * Hand-rolled rather than using `Buffer`, which is a Node global: this module
+ * is loaded by the dashboard as well as the CLI, and a `Buffer` reference
+ * throws at module load in a browser. That shipped once as a blank page.
+ */
+export function encodeMemo(text: string): `0x${string}` {
+  let hex = ''
+  for (const char of text) {
+    const code = char.codePointAt(0)!
+    if (code > 0x7f) throw new Error(`memo must be ASCII: ${text}`)
+    hex += code.toString(16).padStart(2, '0')
+  }
+  if (hex.length > 64) throw new Error(`memo too long for 32 bytes: ${text}`)
+  return `0x${hex.padEnd(64, '0')}` as `0x${string}`
+}
+
 type RawLog = {
   transactionHash: `0x${string}`
   logIndex: number | bigint

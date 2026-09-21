@@ -21,7 +21,7 @@
  */
 
 import type { Ledger } from './ledger.js'
-import { buildLedger } from './ledger.js'
+import { buildLedger, encodeMemo } from './ledger.js'
 
 export const ACCOUNT = '0xb4BB1aF3c66381EbA6d7FbDA4e8184AeEC759e68' as const
 export const PATH_USD = '0x20c0000000000000000000000000000000000000' as const
@@ -68,24 +68,8 @@ export const PURCHASE_REGISTER = [
 
 const usd = (amount: number): bigint => BigInt(Math.round(amount * 1_000_000))
 
-/**
- * 32-byte right-padded memo, exactly as TIP-20 carries it.
- *
- * Hand-rolled rather than using `Buffer`, which is a Node global. This module
- * is imported by the dashboard as well as the CLI and the tests, and a
- * `Buffer` reference throws at module load in a browser - which renders a
- * blank page with the real error only visible in the console.
- */
-function memo(text: string): `0x${string}` {
-  let hex = ''
-  for (const char of text) {
-    const code = char.codePointAt(0)!
-    if (code > 0x7f) throw new Error(`memo must be ASCII: ${text}`)
-    hex += code.toString(16).padStart(2, '0')
-  }
-  if (hex.length > 64) throw new Error(`memo too long for 32 bytes: ${text}`)
-  return `0x${hex.padEnd(64, '0')}` as `0x${string}`
-}
+const memo = encodeMemo
+
 
 type Event = {
   transactionHash: `0x${string}`

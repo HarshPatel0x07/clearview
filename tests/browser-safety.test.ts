@@ -9,6 +9,17 @@ import { describe, expect, it } from 'vitest'
  * page with the real error only in the console - which is exactly what
  * `Buffer.from` in demo-data.ts produced.
  *
+ * **This scan, not the render test, is what catches that class.** jsdom is Node
+ * with a DOM attached, so `Buffer` and `process` are still defined inside it.
+ * Verified by reintroducing the bug: typecheck passed, `vite build` passed, and
+ * `dashboard.test.tsx` passed - only this file failed. Stripping the globals in
+ * a vitest setup file was tried and abandoned, because jsdom uses `Buffer`
+ * internally and removing it kills the worker before any test runs.
+ *
+ * So the two suites are layers rather than alternatives:
+ *   this file           -> Node globals reaching src/
+ *   dashboard.test.tsx  -> render and logic failures
+ *
  * Node-only code belongs in `scripts/`, which the browser never loads.
  */
 const NODE_ONLY = [

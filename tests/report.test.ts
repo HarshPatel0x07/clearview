@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildLedger } from '../src/ledger.js'
+import { buildLedger, encodeMemo } from '../src/ledger.js'
 import { exceptions, renderStatement, statement, toCsv, toJson } from '../src/report.js'
 
 const ACCOUNT = '0xb4BB1aF3c66381EbA6d7FbDA4e8184AeEC759e68' as const
@@ -8,8 +8,8 @@ const DONOR = '0x1111111111111111111111111111111111111111' as const
 const VENDOR = '0x2222222222222222222222222222222222222222' as const
 const PATH_USD = '0x20c0000000000000000000000000000000000000' as const
 
-const memo = (text: string) =>
-  `0x${Buffer.from(text, 'ascii').toString('hex').padEnd(64, '0')}` as `0x${string}`
+// The production encoder, so the fixtures exercise the shipped code path.
+const memo = encodeMemo
 
 const log = (eventName: string, args: Record<string, unknown>, blockNumber: bigint) => ({
   transactionHash: `0x${blockNumber.toString(16).padStart(64, '0')}` as `0x${string}`,

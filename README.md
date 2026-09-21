@@ -84,14 +84,16 @@ Moderato and writes real transactions.
 The Access Key tab is the demo. Grant a deny-all key, watch the zone verify its signature, watch
 a transfer signed by that same key get refused, then revoke it on-chain.
 
-Other commands:
+### Checking the claims in this file
 
 ```bash
-npm test         # 56 tests
-npm run typecheck
-npm run ui:build
+npm run verify   # typecheck + 66 tests + the demo + the UI build, one gate
 npm run prove    # the deny-all key, live against Tempo Moderato
 ```
+
+Every number above is printed by one of those commands. The single gate exists because the
+README once advertised a test count that `npm test` did not produce — a config change had quietly
+redirected the runner, and nothing failed loudly.
 
 ---
 
@@ -181,7 +183,8 @@ src/demo-data.ts   a month of trading, in real TIP-20 event shapes
 ui/                dashboard - a rendering layer only, no ledger logic
 scripts/demo.ts    the whole product in one command
 scripts/prove-denyall-key.ts   the deny-all key, live against Moderato
-tests/             56 tests, including a guard that src/ stays browser-safe
+tests/             66 tests: ledger, reports, a dashboard render test, and a
+                   static scan keeping src/ free of Node globals
 TEMPO-FINDINGS.md  eleven undocumented behaviours found while building
 archive/           the Zcash implementation, and why it was abandoned
 ```
