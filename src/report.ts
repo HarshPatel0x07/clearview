@@ -142,13 +142,13 @@ export function statement(
 }
 
 export type Exceptions = {
-  /** Payments and receipts whose memo matched no known invoice. */
+  /** Receipts whose memo matched no invoice we issued. */
   unmatched: InvoiceMatch[]
-  /** Entries carrying no memo at all, so nothing to reconcile against. */
+  /** Value-moving entries carrying no memo, so nothing to reconcile against. */
   missingMemo: LedgerEntry[]
-  /** Invoices in the register that no payment references. */
+  /** Sales invoices nothing has paid. */
   unpaidInvoices: string[]
-  /** Invoices referenced by more than one entry - a duplicate payment, or a split. */
+  /** An invoice referenced by more than one entry - a duplicate payment, or a split. */
   duplicated: Array<{ invoice: string; entries: LedgerEntry[] }>
 }
 
@@ -158,23 +158,43 @@ export type Exceptions = {
  * An audit tool earns its place by surfacing the awkward cases, not by
  * presenting a tidy total. A clean statement with a silent exception list is
  * worse than no statement.
+ *
+ * The two registers are deliberately separate, because conflating them
+ * manufactures false exceptions. `salesInvoices` are the invoices **we issued**
+ * and are matched against money coming **in**. `purchaseInvoices` are our
+ * suppliers' references and are matched against money going **out**. A payment
+ * to a hosting provider quoting their invoice number is not an anomaly, and
+ * flagging it as one trains the reader to ignore the exception list - which is
+ * the only failure mode that really matters here.
  */
-export function exceptions(ledger: Ledger, invoices: readonly string[]): Exceptions {
-  const matches = matchInvoices(ledger, invoices)
-  const valueMoving = matches.filter(
-    (m) => m.entry.direction === 'receipt' || m.entry.direction === 'payment',
-  )
+export function exceptions(
+  ledger: Ledger,
+  salesInvoices: readonly string[],
+  purchaseInvoices: readonly string[] = [],
+): Exceptions {
+  const all = matchInvoices(ledger, [...salesInvoices, ...purchaseInvoices])
+  const byKey = new Map(all.map((m) => [`${m.entry.txHash}:${m.entry.logIndex}`, m]))
+  const lookup = (e: LedgerEntry) => byKey.get(`${e.txHash}:${e.logIndex}`)!
 
+  const receipts = ledger.entries.filter((e) => e.direction === 'receipt').map(lookup)
+  const payments = ledger.entries.filter((e) => e.direction === 'payment').map(lookup)
+  const valueMoving = [...receipts, ...payments]
+
+  // Only sales invoices can be "unpaid" or "paid twice" - a supplier invoice we
+  // have not paid is an accounts-payable question, not a reconciliation break.
+  const sales = new Set(salesInvoices.map((i) => i.toLowerCase()))
   const seen = new Map<string, LedgerEntry[]>()
   for (const m of valueMoving) {
-    if (!m.invoice) continue
+    if (!m.invoice || !sales.has(m.invoice.toLowerCase())) continue
     seen.set(m.invoice, [...(seen.get(m.invoice) ?? []), m.entry])
   }
 
   return {
-    unmatched: valueMoving.filter((m) => m.invoice === null && m.entry.memo !== null),
+    // Money arrived that we cannot attribute. This is the one that costs real
+    // money to leave unexplained.
+    unmatched: receipts.filter((m) => m.invoice === null && m.entry.memo !== null),
     missingMemo: valueMoving.filter((m) => m.entry.memo === null).map((m) => m.entry),
-    unpaidInvoices: invoices.filter((i) => !seen.has(i)),
+    unpaidInvoices: salesInvoices.filter((i) => !seen.has(i)),
     duplicated: [...seen.entries()]
       .filter(([, entries]) => entries.length > 1)
       .map(([invoice, entries]) => ({ invoice, entries })),

@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "prove": "tsx scripts/prove-denyall-key.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo": "tsx scripts/demo.ts"
   },
   "repository": {
     "type": "git",

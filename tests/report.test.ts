@@ -118,8 +118,21 @@ describe('statement', () => {
 describe('exceptions', () => {
   const exc = exceptions(LEDGER, INVOICES)
 
-  it('flags a memo matching no known invoice', () => {
+  it('flags an incoming payment whose memo matches no invoice we issued', () => {
     expect(exc.unmatched.map((m) => m.entry.memo)).toContain('random note')
+  })
+
+  it('does not flag an outgoing payment quoting a supplier reference', () => {
+    // Our register holds invoices we issued. A payment to a vendor quoting
+    // their number is normal, and calling it an exception trains the reader
+    // to ignore the list.
+    const withSupplier = exceptions(LEDGER, INVOICES, ['INV-2026-088'])
+    expect(withSupplier.unmatched.every((m) => m.entry.direction === 'receipt')).toBe(true)
+  })
+
+  it('only counts sales invoices as unpaid', () => {
+    const withSupplier = exceptions(LEDGER, INVOICES, ['SUP-1'])
+    expect(withSupplier.unpaidInvoices).not.toContain('SUP-1')
   })
 
   it('flags payments with no memo', () => {

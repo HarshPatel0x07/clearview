@@ -9,3 +9,4 @@ venv/
 .secrets/
 node_modules/
 dist/
+clearview-ledger.csv
