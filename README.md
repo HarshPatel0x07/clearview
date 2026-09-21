@@ -84,6 +84,10 @@ Moderato and writes real transactions.
 The Access Key tab is the demo. Grant a deny-all key, watch the zone verify its signature, watch
 a transfer signed by that same key get refused, then revoke it on-chain.
 
+It works under `npm run ui` only, not in a built bundle. That is deliberate — the key is read in
+a way Vite will not inline, because a key baked into shipped JavaScript is a key published, and a
+demo convenience is not worth that even on a testnet.
+
 ### Checking the claims in this file
 
 ```bash

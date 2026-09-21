@@ -11,3 +11,4 @@ node_modules/
 dist/
 clearview-ledger.csv
 .env.local
+dist-ui/

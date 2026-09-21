@@ -31,8 +31,18 @@ export function KeyLifecycle() {
   // bundle fails - the books should not go dark because a key panel broke.
   async function tempo() {
     const [t, ox] = await Promise.all([import('viem/tempo'), import('ox')])
+    // Read through a cast so Vite does NOT statically inline the value into a
+    // production bundle. The consequence is deliberate: this panel works under
+    // `npm run ui` (dev, where import.meta.env is populated at runtime) and not
+    // in a built artifact. A key baked into shipped JavaScript is a key
+    // published, and a demo convenience is not worth that even on testnet.
     const pk = (import.meta as any).env?.VITE_TESTNET_KEY as `0x${string}` | undefined
-    if (!pk) throw new Error('VITE_TESTNET_KEY not set - see README')
+    if (!pk) {
+      throw new Error(
+        'VITE_TESTNET_KEY not set. Run the dashboard with `npm run ui` after copying ' +
+          '.env.example to .env.local - the live panel is dev-only by design.',
+      )
+    }
     const account = t.Account.fromSecp256k1(pk)
     const client = t.Client.create({ account, chain: t.Chain.moderato, transport: t.http() })
     return { t, ox, account, client }
