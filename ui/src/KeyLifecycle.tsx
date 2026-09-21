@@ -31,12 +31,16 @@ export function KeyLifecycle() {
   // bundle fails - the books should not go dark because a key panel broke.
   async function tempo() {
     const [t, ox] = await Promise.all([import('viem/tempo'), import('ox')])
-    // Read through a cast so Vite does NOT statically inline the value into a
-    // production bundle. The consequence is deliberate: this panel works under
-    // `npm run ui` (dev, where import.meta.env is populated at runtime) and not
-    // in a built artifact. A key baked into shipped JavaScript is a key
-    // published, and a demo convenience is not worth that even on testnet.
-    const pk = (import.meta as any).env?.VITE_TESTNET_KEY as `0x${string}` | undefined
+    // Written as the exact `import.meta.env.VITE_*` form, because that is the
+    // only shape Vite statically replaces. An earlier version used a cast and
+    // optional chaining to avoid inlining the value into a production bundle -
+    // which worked, in the sense that it never resolved at all and every step
+    // reported the key as missing.
+    //
+    // A production build WILL inline this. That is why dist-ui/ is gitignored
+    // and why the key here is a testnet key holding faucet tokens. Never build
+    // this with a .env.local containing anything of value.
+    const pk = import.meta.env.VITE_TESTNET_KEY as `0x${string}` | undefined
     if (!pk) {
       throw new Error(
         'VITE_TESTNET_KEY not set. Run the dashboard with `npm run ui` after copying ' +
@@ -193,45 +197,49 @@ export function KeyLifecycle() {
   }
 
   return (
-    <div className="panel">
-      <h2>
-        Access Key lifecycle<span className="sub">live on Tempo Moderato</span>
-      </h2>
-      <p className="note" style={{ marginBottom: 18 }}>
-        Every step writes or reads a real transaction on Moderato. This is the part that is not
-        seeded, and it is the part that distinguishes a Tempo Access Key from a Zcash viewing key:
-        it is <strong>revocable, expiring and auditable</strong>.
+    <div>
+      <div className="section-head">
+        <h2>Access Key lifecycle</h2>
+        <span className="meta">live on Tempo Moderato</span>
+      </div>
+
+      <p className="strapline" style={{ marginTop: 10, marginBottom: 26 }}>
+        Every step writes or reads a real transaction. This is the part that is not seeded, and it
+        is what separates a Tempo Access Key from a Zcash viewing key: it is revocable, expiring
+        and auditable.
       </p>
 
       {keyAddress && (
-        <p className="note" style={{ marginBottom: 14 }}>
-          Auditor key: <span className="hash">{keyAddress}</span>
-        </p>
+        <div className="figures" style={{ marginBottom: 26 }}>
+          <div>
+            <div className="k">Auditor key</div>
+            <div className="v figure">{keyAddress}</div>
+          </div>
+        </div>
       )}
 
-      {steps.map((s) => {
+      {steps.map((s, i) => {
         const r = results[s.id]
+        const running = r === 'running'
+        const done = r && r !== 'running'
         return (
-          <div className="exception" key={s.id} style={{ borderLeftColor: 'var(--accent)' }}>
-            <div className="row">
-              <div style={{ flex: 1 }}>
-                <div className="what">{s.title}</div>
-                <div className="why">{s.detail}</div>
-              </div>
-              <button
-                className={`action ${s.id === 'revoke' ? 'danger' : ''}`}
-                disabled={r === 'running'}
-                onClick={() => run(s)}
-              >
-                {r === 'running' ? 'working…' : s.id === 'revoke' ? 'Revoke' : 'Run'}
-              </button>
-            </div>
-            {r && r !== 'running' && (
-              <div style={{ marginTop: 9 }}>
-                <span className={`tag ${r.ok ? 'ok' : 'warn'}`}>{r.ok ? 'as expected' : 'note'}</span>{' '}
-                <span className="why">{r.message}</span>
+          <div className="step" key={s.id}>
+            <div className="n">{i + 1}</div>
+            <div className="title">{s.title}</div>
+            <button
+              className={`btn ${s.id === 'revoke' ? 'destructive' : ''}`}
+              disabled={running}
+              onClick={() => run(s)}
+            >
+              {running ? 'Working…' : s.id === 'revoke' ? 'Revoke' : done ? 'Run again' : 'Run'}
+            </button>
+            <div className="detail">{s.detail}</div>
+            {done && (
+              <div className={`outcome ${r.ok ? 'good' : 'bad'}`}>
+                <div className="heading">{r.ok ? 'As expected' : 'Needs attention'}</div>
+                {r.message}
                 {r.hash && (
-                  <div style={{ marginTop: 5 }}>
+                  <div style={{ marginTop: 7 }}>
                     <a className="hash" href={EXPLORER + r.hash} target="_blank" rel="noreferrer">
                       {r.hash}
                     </a>
@@ -243,10 +251,10 @@ export function KeyLifecycle() {
         )
       })}
 
-      <p className="note" style={{ marginTop: 16 }}>
-        The key used here is a testnet key holding faucet tokens, injected at build time so the
-        demo runs without a wallet prompt. That is fine for Moderato and would be indefensible on
-        a chain with real money — a production build would sign in the user's wallet.
+      <p className="footnote">
+        The key used here is a testnet key holding faucet tokens, read from a local env file so the
+        demo runs without a wallet prompt. That is fine on Moderato and would be indefensible on a
+        chain with real money — a production build would sign in the user's own wallet.
       </p>
     </div>
   )

@@ -1,116 +1,479 @@
-/* Deliberately plain. The subject is money, and an accountant reading a
-   statement wants density and alignment, not gradients. */
+/* Clearview — visual system
+ *
+ * Anchored on how financial interfaces that people trust are actually built,
+ * rather than on a component library's defaults. The rules, and why:
+ *
+ *   1. Tabular numerals wherever money appears. Proportional figures make
+ *      columns of money ragged, and ragged money reads as amateur. This is
+ *      the single highest-leverage decision on the page.
+ *   2. A type scale, not ad-hoc sizes. The previous version had eight
+ *      different font sizes and four different border radii - which is what
+ *      you get when every value is chosen locally and none is chosen globally.
+ *   3. Colour carries state and nothing else. No accent-coloured buttons, no
+ *      decorative tints. Green and red mean direction of money; amber means
+ *      something needs a human. Direction is never signalled by colour alone -
+ *      the sign and the label carry it too, for anyone who cannot see the hue.
+ *   4. Hierarchy from type and space, not boxes. Borders only where there is
+ *      a real boundary. If a border seems necessary, more spacing usually is.
+ *   5. One number leads. The reconciled balance is the largest thing on the
+ *      page because it answers the first question anyone asks.
+ *   6. Every figure carries an "as of". A financial number without one is not
+ *      auditable.
+ */
+
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
 
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1d212a;
-  --line: #2a2f3a;
-  --text: #e6e8ec;
-  --muted: #9aa3b2;
-  --in: #4ade80;
-  --out: #f87171;
-  --warn: #fbbf24;
-  --accent: #60a5fa;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* Surfaces. Near-black rather than pure black; a single elevated tone. */
+  --bg: #0b0d10;
+  --raised: #12151a;
+  --hairline: #1e232b;
+  --hairline-strong: #2b323d;
+
+  /* Text. Three weights of emphasis is enough for anything. */
+  --ink: #e8eaed;
+  --ink-secondary: #9ba3af;
+  --ink-tertiary: #6b7280;
+
+  /* State only. Desaturated for a dark surface - the green that glows on
+     white screams on black. */
+  --positive: #4ea67a;
+  --negative: #cf6b6b;
+  --attention: #c9963f;
+
+  /* Type scale. Five steps, and no value outside them. */
+  --t-micro: 11.5px;
+  --t-small: 12.5px;
+  --t-body: 14px;
+  --t-lead: 19px;
+  --t-display: 34px;
+
+  --radius: 6px;
+  --gap: 8px;
+
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+}
 
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--text);
-  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv05' 1; /* Inter's single-storey l, easier to scan */
 }
 
-.wrap { max-width: 1140px; margin: 0 auto; padding: 28px 20px 64px; }
+/* Every figure. Applied by class so it is deliberate, not global. */
+.figure {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: -0.005em;
+}
 
-header h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
-header p { margin: 0; color: var(--muted); max-width: 70ch; }
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 40px 28px 96px;
+}
 
-/* The honesty banner. It should be impossible to miss and impossible to
-   mistake for decoration. */
-.banner {
-  margin: 18px 0 24px;
+/* ---- masthead ---------------------------------------------------------- */
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.masthead h1 {
+  margin: 0;
+  font-size: var(--t-lead);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.masthead .account {
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.strapline {
+  margin: 0 0 26px;
+  color: var(--ink-secondary);
+  font-size: var(--t-body);
+  max-width: 68ch;
+}
+
+/* The provenance notice. Not a decorated callout - a line of record, set
+   quietly, because overstating it would look defensive. */
+.provenance {
+  display: flex;
+  gap: 10px;
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 30px;
+  font-size: var(--t-small);
+  color: var(--ink-secondary);
+  line-height: 1.55;
+}
+.provenance .marker {
+  color: var(--attention);
+  flex-shrink: 0;
+  font-weight: 500;
+}
+.provenance strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+.provenance a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--hairline-strong);
+}
+.provenance a:hover {
+  text-decoration-color: var(--ink-secondary);
+}
+
+/* ---- tabs (Radix) ------------------------------------------------------ */
+
+.tablist {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 30px;
+}
+.tab {
+  all: unset;
+  cursor: pointer;
+  padding: 0 0 11px;
+  font-size: var(--t-body);
+  color: var(--ink-tertiary);
+  border-bottom: 1.5px solid transparent;
+  margin-bottom: -1px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.tab:hover {
+  color: var(--ink-secondary);
+}
+.tab[data-state='active'] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.tab:focus-visible {
+  outline: 2px solid var(--ink-secondary);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.tab .badge {
+  font-size: var(--t-micro);
+  color: var(--attention);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- the lead figure --------------------------------------------------- */
+
+.headline {
+  margin-bottom: 34px;
+}
+.headline .label {
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  margin-bottom: 7px;
+}
+.headline .amount {
+  font-size: var(--t-display);
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.headline .unit {
+  font-size: var(--t-lead);
+  color: var(--ink-tertiary);
+  font-weight: 400;
+  margin-left: 7px;
+  letter-spacing: 0;
+}
+.headline .asof {
+  margin-top: 9px;
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.headline .asof .state {
+  color: var(--positive);
+}
+.headline .asof .state.bad {
+  color: var(--negative);
+}
+
+/* Supporting figures: a quiet row, not a grid of identical cards. */
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 44px;
+  padding: 18px 0;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+.figures > div {
+  min-width: 124px;
+}
+.figures .k {
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  margin-bottom: 4px;
+}
+.figures .v {
+  font-size: var(--t-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- tables ------------------------------------------------------------ */
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 34px 0 2px;
+}
+.section-head h2 {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: 500;
+}
+.section-head .meta {
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+thead th {
+  text-align: left;
+  font-size: var(--t-micro);
+  font-weight: 500;
+  color: var(--ink-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 12px 14px 9px;
+  border-bottom: 1px solid var(--hairline-strong);
+  white-space: nowrap;
+}
+tbody td {
   padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--warn);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 13px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--t-body);
+  vertical-align: baseline;
 }
-.banner strong { color: var(--text); }
-.banner a { color: var(--accent); }
-
-nav { display: flex; gap: 4px; margin-bottom: 18px; flex-wrap: wrap; }
-nav button {
-  background: transparent; color: var(--muted); border: 1px solid transparent;
-  padding: 7px 13px; border-radius: 6px; cursor: pointer; font-size: 13px;
+tbody tr:last-child td {
+  border-bottom: none;
 }
-nav button:hover { color: var(--text); background: var(--panel); }
-nav button[aria-selected="true"] {
-  background: var(--panel-2); color: var(--text); border-color: var(--line);
+tbody tr:hover td {
+  background: var(--raised);
 }
-nav button .count {
-  margin-left: 7px; padding: 1px 6px; border-radius: 9px;
-  background: var(--warn); color: #1a1205; font-size: 11px; font-weight: 600;
+th.right,
+td.right {
+  text-align: right;
+}
+td.money {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+td.money.pos {
+  color: var(--positive);
+}
+td.money.neg {
+  color: var(--negative);
+}
+td.quiet {
+  color: var(--ink-tertiary);
+}
+td.direction {
+  color: var(--ink-secondary);
+  font-size: var(--t-small);
 }
 
-.panel {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 8px; padding: 18px; margin-bottom: 16px;
+/* Chips carry state, so they are outlines rather than filled blocks - a
+   filled colour block reads as a button and invites a click. */
+.chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  font-size: var(--t-micro);
+  border: 1px solid var(--hairline-strong);
+  color: var(--ink-secondary);
+  white-space: nowrap;
 }
-.panel h2 { margin: 0 0 14px; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
-.panel h2 .sub { color: var(--muted); font-weight: 400; margin-left: 8px; }
-
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
-.stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 13px; }
-.stat .k { color: var(--muted); font-size: 12px; }
-.stat .v { font-family: var(--mono); font-size: 19px; margin-top: 5px; }
-
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th {
-  text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
-  padding: 7px 10px; border-bottom: 1px solid var(--line);
+.chip.matched {
+  border-color: rgba(78, 166, 122, 0.35);
+  color: var(--positive);
 }
-td { padding: 8px 10px; border-bottom: 1px solid rgba(42,47,58,0.5); }
-tbody tr:hover { background: var(--panel-2); }
-.num { font-family: var(--mono); text-align: right; white-space: nowrap; }
-.in { color: var(--in); }
-.out { color: var(--out); }
-.muted { color: var(--muted); }
-
-.tag {
-  display: inline-block; padding: 1px 7px; border-radius: 4px;
-  font-size: 11px; border: 1px solid var(--line); color: var(--muted);
+.chip.flagged {
+  border-color: rgba(201, 150, 63, 0.4);
+  color: var(--attention);
 }
-.tag.ok { color: var(--in); border-color: rgba(74,222,128,0.3); }
-.tag.warn { color: var(--warn); border-color: rgba(251,191,36,0.35); }
 
-.recon { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.recon .verdict { font-size: 15px; font-weight: 600; }
-.recon .verdict.ok { color: var(--in); }
-.recon .verdict.bad { color: var(--out); }
+/* ---- exception queue --------------------------------------------------- */
 
-.exception {
-  border-left: 3px solid var(--warn); background: var(--panel-2);
-  padding: 11px 14px; border-radius: 0 6px 6px 0; margin-bottom: 9px;
+.queue-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 28px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--hairline);
 }
-.exception .what { font-weight: 600; margin-bottom: 3px; }
-.exception .why { color: var(--muted); font-size: 12.5px; }
-
-button.action {
-  background: var(--accent); color: #07121f; border: none; font-weight: 600;
-  padding: 9px 15px; border-radius: 6px; cursor: pointer; font-size: 13px;
+.queue-row:last-child {
+  border-bottom: none;
 }
-button.action:hover { filter: brightness(1.1); }
-button.action:disabled { opacity: 0.45; cursor: not-allowed; }
-button.danger { background: var(--out); color: #230909; }
-button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+.queue-row .what {
+  font-size: var(--t-body);
+}
+.queue-row .amount {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.queue-row .action {
+  grid-column: 1 / -1;
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  max-width: 80ch;
+}
+.queue-row .kind {
+  color: var(--attention);
+  font-size: var(--t-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
 
-.hash { font-family: var(--mono); font-size: 12px; color: var(--accent); word-break: break-all; }
-.note { color: var(--muted); font-size: 12.5px; max-width: 78ch; }
-.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.spacer { flex: 1; }
+/* ---- stepper ----------------------------------------------------------- */
+
+.step {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  gap: 0 14px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.step:last-of-type {
+  border-bottom: none;
+}
+.step .n {
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+.step .title {
+  font-size: var(--t-body);
+}
+.step .detail {
+  grid-column: 2;
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  margin-top: 3px;
+  max-width: 76ch;
+}
+.step .outcome {
+  grid-column: 2 / -1;
+  margin-top: 11px;
+  padding: 10px 13px;
+  background: var(--raised);
+  border-radius: var(--radius);
+  border-left: 2px solid var(--hairline-strong);
+  font-size: var(--t-small);
+  color: var(--ink-secondary);
+}
+.step .outcome.good {
+  border-left-color: var(--positive);
+}
+.step .outcome.bad {
+  border-left-color: var(--negative);
+}
+.step .outcome .heading {
+  color: var(--ink);
+  margin-bottom: 3px;
+}
+
+/* ---- controls ---------------------------------------------------------- */
+
+button.btn {
+  all: unset;
+  cursor: pointer;
+  padding: 6px 13px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline-strong);
+  font-size: var(--t-small);
+  color: var(--ink);
+  white-space: nowrap;
+}
+button.btn:hover:not(:disabled) {
+  background: var(--raised);
+  border-color: var(--ink-tertiary);
+}
+button.btn:focus-visible {
+  outline: 2px solid var(--ink-secondary);
+  outline-offset: 2px;
+}
+button.btn:disabled {
+  color: var(--ink-tertiary);
+  cursor: default;
+}
+button.btn.destructive {
+  color: var(--negative);
+  border-color: rgba(207, 107, 107, 0.35);
+}
+button.btn.destructive:hover:not(:disabled) {
+  background: rgba(207, 107, 107, 0.07);
+}
+
+.hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--t-micro);
+  color: var(--ink-secondary);
+  word-break: break-all;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--hairline-strong);
+}
+.hash:hover {
+  color: var(--ink);
+}
+
+.footnote {
+  margin-top: 30px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hairline);
+  font-size: var(--t-small);
+  color: var(--ink-tertiary);
+  max-width: 82ch;
+  line-height: 1.6;
+}
+
+.empty {
+  padding: 44px 0;
+  text-align: center;
+  color: var(--ink-tertiary);
+  font-size: var(--t-small);
+}
