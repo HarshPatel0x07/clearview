@@ -70,11 +70,26 @@ RECONCILED  ledger 7220.000000 = chain 7220.000000
 ==================================================================
 ```
 
+### The dashboard
+
+```bash
+cp .env.example .env.local     # add a testnet key for the live Access Key panel
+npm run ui
+```
+
+Five views: **Statement** with the reconciliation, **Ledger** with running balance and matched
+invoices, **Exceptions**, **Counterparties**, and **Access Key** — which runs live against
+Moderato and writes real transactions.
+
+The Access Key tab is the demo. Grant a deny-all key, watch the zone verify its signature, watch
+a transfer signed by that same key get refused, then revoke it on-chain.
+
 Other commands:
 
 ```bash
 npm test         # 43 tests
 npm run typecheck
+npm run ui:build
 npm run prove    # the deny-all key, live against Tempo Moderato
 ```
 
@@ -163,6 +178,7 @@ injectable protocol rather than a concrete client.
 src/ledger.ts      classification, reconciliation, memo decoding, invoice matching
 src/report.ts      statement, CSV, exception report
 src/demo-data.ts   a month of trading, in real TIP-20 event shapes
+ui/                dashboard - a rendering layer only, no ledger logic
 scripts/demo.ts    the whole product in one command
 scripts/prove-denyall-key.ts   the deny-all key, live against Moderato
 tests/             43 tests
