@@ -68,9 +68,21 @@ export const PURCHASE_REGISTER = [
 
 const usd = (amount: number): bigint => BigInt(Math.round(amount * 1_000_000))
 
-/** 32-byte right-padded memo, exactly as TIP-20 carries it. */
+/**
+ * 32-byte right-padded memo, exactly as TIP-20 carries it.
+ *
+ * Hand-rolled rather than using `Buffer`, which is a Node global. This module
+ * is imported by the dashboard as well as the CLI and the tests, and a
+ * `Buffer` reference throws at module load in a browser - which renders a
+ * blank page with the real error only visible in the console.
+ */
 function memo(text: string): `0x${string}` {
-  const hex = Buffer.from(text, 'ascii').toString('hex')
+  let hex = ''
+  for (const char of text) {
+    const code = char.codePointAt(0)!
+    if (code > 0x7f) throw new Error(`memo must be ASCII: ${text}`)
+    hex += code.toString(16).padStart(2, '0')
+  }
   if (hex.length > 64) throw new Error(`memo too long for 32 bytes: ${text}`)
   return `0x${hex.padEnd(64, '0')}` as `0x${string}`
 }
