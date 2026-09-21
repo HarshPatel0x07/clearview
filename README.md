@@ -87,7 +87,7 @@ a transfer signed by that same key get refused, then revoke it on-chain.
 Other commands:
 
 ```bash
-npm test         # 43 tests
+npm test         #  tests
 npm run typecheck
 npm run ui:build
 npm run prove    # the deny-all key, live against Tempo Moderato
@@ -181,7 +181,7 @@ src/demo-data.ts   a month of trading, in real TIP-20 event shapes
 ui/                dashboard - a rendering layer only, no ledger logic
 scripts/demo.ts    the whole product in one command
 scripts/prove-denyall-key.ts   the deny-all key, live against Moderato
-tests/             43 tests
+tests/              tests, including a guard that src/ stays browser-safe
 TEMPO-FINDINGS.md  eleven undocumented behaviours found while building
 archive/           the Zcash implementation, and why it was abandoned
 ```
