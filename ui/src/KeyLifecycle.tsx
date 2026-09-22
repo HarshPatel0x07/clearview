@@ -120,7 +120,10 @@ export function KeyLifecycle() {
           hash: t.ZoneRpcAuthentication.getSignPayload(auth),
         })
         const token = t.ZoneRpcAuthentication.serialize({ ...auth, signature: sig } as any)
-        const res = await fetch(zc.rpcUrls.http, {
+        // Through the dev proxy, not zc.rpcUrls.http directly: the zone's
+        // CORS preflight does not allow the X-Authorization-Token header it
+        // requires, so a direct browser call can never succeed.
+        const res = await fetch('/zone-a', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

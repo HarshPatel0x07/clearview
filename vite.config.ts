@@ -19,6 +19,21 @@ export default defineConfig({
   // ambiguity entirely.
   envDir: repoRoot,
   plugins: [react()],
-  server: { port: 5173, open: true },
+  server: {
+    port: 5173,
+    open: true,
+    // The Zone RPC requires an `X-Authorization-Token` header but its CORS
+    // preflight only allows `Content-Type, Authorization`. A browser therefore
+    // blocks every zone call before it is sent, which surfaces as a bare
+    // "Failed to fetch". Proxying makes the request same-origin so no
+    // preflight happens. Reported upstream; remove this when it is fixed.
+    proxy: {
+      '/zone-a': {
+        target: 'https://rpc-zone-a.testnet.tempo.xyz',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/zone-a/, ''),
+      },
+    },
+  },
   build: { outDir: '../dist-ui', emptyOutDir: true },
 })
