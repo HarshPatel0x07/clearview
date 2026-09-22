@@ -10,7 +10,8 @@
     "demo": "tsx scripts/demo.ts",
     "ui": "vite",
     "ui:build": "vite build",
-    "verify": "npm run typecheck && npm test && npm run demo && npm run ui:build"
+    "verify": "npm run typecheck && npm test && npm run check:readme && npm run demo && npm run ui:build",
+    "check:readme": "tsx scripts/check-readme-claims.ts"
   },
   "repository": {
     "type": "git",

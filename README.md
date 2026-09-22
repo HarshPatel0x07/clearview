@@ -91,13 +91,17 @@ demo convenience is not worth that even on a testnet.
 ### Checking the claims in this file
 
 ```bash
-npm run verify   # typecheck + 66 tests + the demo + the UI build, one gate
+npm run verify   # typecheck + 69 tests + the demo + the UI build, one gate
 npm run prove    # the deny-all key, live against Tempo Moderato
 ```
 
-Every number above is printed by one of those commands. The single gate exists because the
-README once advertised a test count that `npm test` did not produce — a config change had quietly
-redirected the runner, and nothing failed loudly.
+Every number above is printed by one of those commands, and `verify` **checks this file against
+reality** — it fails if the test count here disagrees with the suite.
+
+That check exists because the number drifted four times: once to zero when a config change
+redirected the runner, twice when new tests were added, and once to an empty string when it was
+parsed from output containing ANSI escapes. It is the most checkable claim in this README, which
+is why it must not be wrong.
 
 ---
 
@@ -187,7 +191,7 @@ src/demo-data.ts   a month of trading, in real TIP-20 event shapes
 ui/                dashboard - a rendering layer only, no ledger logic
 scripts/demo.ts    the whole product in one command
 scripts/prove-denyall-key.ts   the deny-all key, live against Moderato
-tests/             66 tests: ledger, reports, a dashboard render test, and a
+tests/             69 tests: ledger, reports, a dashboard render test, and a
                    static scan keeping src/ free of Node globals
 TEMPO-FINDINGS.md  eleven undocumented behaviours found while building
 archive/           the Zcash implementation, and why it was abandoned
